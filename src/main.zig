@@ -8,6 +8,12 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Endian = std.builtin.Endian;
 
+// TODO:
+// 1. Ip6AddrScoped
+// 2. Ip4Prefix
+// 3. Ip6Prefix
+// 4. Data structures?
+
 fn invalidFmtErr(comptime fmt: []const u8, value: type) void {
     @compileError("invalid format string '" ++ fmt ++ "' for type '" ++ @typeName(value) ++ "'");
 }
@@ -20,14 +26,9 @@ fn AddrValue(comptime T: type) type {
     const type_size = @sizeOf(T);
     assert(type_size > 0 and (type_size & (type_size - 1) == 0));
 
-    const bitsForPosition = math.log2(@typeInfo(T).Int.bits);
-
     return packed struct {
         const Self = @This();
-        const PositionType = @Type(builtin.Type{ .Int = builtin.Type.Int{
-            .signedness = builtin.Signedness.unsigned,
-            .bits = bitsForPosition,
-        } });
+        const PositionType = math.Log2Int(T);
         const size = type_size;
 
         v: T,
@@ -230,6 +231,18 @@ pub const Ip4Addr = packed struct {
     }
 };
 
+pub const Ip6AddrParseError = error{
+    InvalidCharacter,
+    EmbeddedIp4InvalidLocation,
+    EmbeddedIp4InvalidFormat,
+    EmptySegment,
+    MultipleEllipses,
+    TooManySegments,
+    NotEnoughSegments,
+    AmbiguousEllipsis,
+    Overflow,
+};
+
 pub const Ip6Addr = packed struct {
     const Self = @This();
     const ValueType = AddrValue(u128);
@@ -249,13 +262,115 @@ pub const Ip6Addr = packed struct {
         return fromArray(u8, bs.*);
     }
 
-    pub fn parse(s: []const u8) !Self {
-        // we don't allow scoped addresses here
-        if (std.mem.indexOfScalar(u8, s, '%')) |_| {
-            return error.InvalidCharacter;
+    pub fn parse(input: []const u8) Ip6AddrParseError!Self {
+        // parsing strategy is almost identical to https://pkg.go.dev/net/netip
+
+        var s: []const u8 = input[0..];
+        var addr: [8]u16 = [_]u16{0} ** 8;
+        var ellipsis: ?usize = null;
+
+        if (s.len >= 2 and s[0] == ':' and s[1] == ':') {
+            ellipsis = 0;
+            s = s[2..];
+            if (s.len == 0) {
+                return Ip6Addr{ .addr = ValueType{ .v = 0 } };
+            }
         }
 
-        return fromNetAddress(try net.Ip6Address.parse(s, 0));
+        var filled: usize = 0;
+
+        for (addr) |_, addr_i| {
+            var chunk_end: usize = 0;
+            var acc: u16 = 0;
+
+            // parse the next segment
+            while (chunk_end < s.len) : (chunk_end += 1) {
+                const c = s[chunk_end];
+                switch (c) {
+                    '0'...'9', 'a'...'f', 'A'...'F' => {
+                        const d = switch (c) {
+                            '0'...'9' => c - '0',
+                            'a'...'f' => c - 'a' + 10,
+                            'A'...'F' => c - 'A' + 10,
+                            else => unreachable,
+                        };
+
+                        acc = math.shlExact(u16, acc, 4) catch return Ip6AddrParseError.Overflow;
+                        acc += d;
+                    },
+                    '.', ':' => break,
+                    else => return Ip6AddrParseError.InvalidCharacter,
+                }
+            }
+
+            if (chunk_end == 0) {
+                return Ip6AddrParseError.EmptySegment;
+            }
+
+            // check if this is an embedded v4 address
+            if (chunk_end < s.len and s[chunk_end] == '.') {
+                if ((ellipsis == null and addr_i != 6) or addr_i > 6) {
+                    // wrong position to insert 4 bytes of the embedded ip4
+                    return Ip6AddrParseError.EmbeddedIp4InvalidLocation;
+                }
+
+                // discard the acc and parse the whole fragment as v4
+                const ip4 = Ip4Addr.parse(s[0..]) catch return Ip6AddrParseError.EmbeddedIp4InvalidFormat;
+                const segs = ip4.toArray(u16);
+                inline for (segs) |d, j| {
+                    addr[addr_i + j] = d;
+                }
+                filled += segs.len;
+                s = s[s.len..];
+                break;
+            }
+
+            // save the segment
+            addr[addr_i] = acc;
+            filled += 1;
+            s = s[chunk_end..];
+            if (s.len == 0) {
+                break;
+            }
+
+            // the following char must be ':'
+            std.debug.assert(s[0] == ':');
+            if (s.len == 1) {
+                return Ip6AddrParseError.EmptySegment;
+            }
+            s = s[1..];
+
+            // check one more char in case it's ellipsis '::'
+            if (s[0] == ':') {
+                if (ellipsis) |_| {
+                    return Ip6AddrParseError.MultipleEllipses;
+                }
+
+                ellipsis = filled;
+                s = s[1..];
+                if (s.len == 0) {
+                    break;
+                }
+            }
+        }
+
+        if (s.len != 0) {
+            return Ip6AddrParseError.TooManySegments;
+        }
+
+        if (filled < addr.len) {
+            if (ellipsis) |e| {
+                const zs = addr.len - filled;
+                mem.copyBackwards(u16, addr[e + zs .. addr.len], addr[e..filled]);
+                mem.set(u16, addr[e .. e + zs], 0);
+            } else {
+                return Ip6AddrParseError.NotEnoughSegments;
+            }
+        } else if (ellipsis) |_| {
+            return Ip6AddrParseError.AmbiguousEllipsis;
+        }
+
+        return fromArray(u16, addr);
     }
 
     pub fn value(self: Ip6Addr) u128 {
@@ -457,17 +572,21 @@ test "Ip6 Address/toArrayX" {
 }
 
 test "Ip4 Address/Parse" {
+    const comp_time_one = comptime try Ip4Addr.parse("0.0.0.1");
+
+    try testing.expectEqual(@as(u32, 1), comp_time_one.value());
+
     try testing.expectEqual(
-        Ip4Addr.fromArray(u8, [_]u8{ 192, 168, 30, 15 }).value(),
-        (try Ip4Addr.parse("192.168.30.15")).value(),
+        Ip4Addr.fromArray(u8, [_]u8{ 192, 168, 30, 15 }),
+        (try Ip4Addr.parse("192.168.30.15")),
     );
     try testing.expectEqual(
-        Ip4Addr.fromArray(u8, [_]u8{ 0, 0, 0, 0 }).value(),
-        (try Ip4Addr.parse("0.0.0.0")).value(),
+        Ip4Addr.fromArray(u8, [_]u8{ 0, 0, 0, 0 }),
+        (try Ip4Addr.parse("0.0.0.0")),
     );
     try testing.expectEqual(
-        Ip4Addr.fromArray(u8, [_]u8{ 255, 255, 255, 255 }).value(),
-        (try Ip4Addr.parse("255.255.255.255")).value(),
+        Ip4Addr.fromArray(u8, [_]u8{ 255, 255, 255, 255 }),
+        (try Ip4Addr.parse("255.255.255.255")),
     );
 
     try testing.expectError(Ip4AddrParseError.NotEnoughOctets, Ip4Addr.parse(""));
@@ -483,10 +602,111 @@ test "Ip4 Address/Parse" {
 }
 
 test "Ip6 Address/Parse" {
-    const addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef });
+    const comp_time_one = comptime try Ip6Addr.parse("::1");
 
-    try testing.expectEqual(addr.value(), (try Ip6Addr.parse("2001:db8::89ab:cdef")).value());
-    try testing.expect(Ip4Addr.parse("@") == error.InvalidCharacter);
+    // compile time test
+    try testing.expectEqual(@as(u128, 1), comp_time_one.value());
+
+    // format tests
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("::")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0::0:0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("::0:0:0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0:0::")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0:0:0::0:0:0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0:0:0:0:0:0:0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0:0:0:0:0:0.0.0.0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("::0.0.0.0")));
+    try testing.expectEqual(Ip6Addr.fromArray(u128, [_]u128{0}), (try Ip6Addr.parse("0:0::0.0.0.0")));
+
+    // value tests
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8 }),
+        (try Ip6Addr.parse("1:2:3:4:5:6:7:8")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x4, 0x0, 0x6, 0x7, 0x8 }),
+        (try Ip6Addr.parse("1:2:3:4::6:7:8")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x0, 0x0, 0x6, 0x7, 0x8 }),
+        (try Ip6Addr.parse("1:2:3::6:7:8")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x7, 0x8 }),
+        (try Ip6Addr.parse("::6:7:8")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0 }),
+        (try Ip6Addr.parse("1:2:3::")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8 }),
+        (try Ip6Addr.parse("::8")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 }),
+        (try Ip6Addr.parse("1::")),
+    );
+
+    // embedded ipv4
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u8, [_]u8{ 0x1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa, 0xb, 0xc, 0xd }),
+        (try Ip6Addr.parse("100::10.11.12.13")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u8, [_]u8{ 0, 0x1, 0, 0x2, 0, 0x3, 0, 0x4, 0, 0x5, 0, 0x6, 0xa, 0xb, 0xc, 0xd }),
+        (try Ip6Addr.parse("1:2:3:4:5:6:10.11.12.13")),
+    );
+
+    // larger numbers
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef }),
+        (try Ip6Addr.parse("2001:db8::89ab:cdef")),
+    );
+    try testing.expectEqual(
+        Ip6Addr.fromArray(u16, [_]u16{ 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff }),
+        (try Ip6Addr.parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff")),
+    );
+
+    // empty or ambiguous segments
+    try testing.expectError(Ip6AddrParseError.EmptySegment, Ip6Addr.parse(":::"));
+    try testing.expectError(Ip6AddrParseError.EmptySegment, Ip6Addr.parse(":"));
+    try testing.expectError(Ip6AddrParseError.EmptySegment, Ip6Addr.parse("1:2:::4"));
+    try testing.expectError(Ip6AddrParseError.EmptySegment, Ip6Addr.parse("1:2::.1.2.3"));
+    try testing.expectError(Ip6AddrParseError.EmptySegment, Ip6Addr.parse("1:2::3:"));
+
+
+    // multiple '::'
+    try testing.expectError(Ip6AddrParseError.MultipleEllipses, Ip6Addr.parse("1::2:3::4"));
+    try testing.expectError(Ip6AddrParseError.MultipleEllipses, Ip6Addr.parse("::1:2::"));
+
+    // overflow
+    try testing.expectError(Ip6AddrParseError.Overflow, Ip6Addr.parse("::1cafe"));
+
+    // invalid characters
+    try testing.expectError(Ip6AddrParseError.InvalidCharacter, Ip6Addr.parse("cafe:xafe::1"));
+    try testing.expectError(Ip6AddrParseError.InvalidCharacter, Ip6Addr.parse("cafe;cafe::1"));
+
+    // incorrectly embedded ip4
+    try testing.expectError(Ip6AddrParseError.EmbeddedIp4InvalidLocation, Ip6Addr.parse("1:1.2.3.4"));
+    try testing.expectError(Ip6AddrParseError.EmbeddedIp4InvalidLocation, Ip6Addr.parse("1:2:3:4:5:6:7:1.2.3.4"));
+
+    // bad embedded ip4
+    try testing.expectError(Ip6AddrParseError.EmbeddedIp4InvalidFormat, Ip6Addr.parse("1::1.300.3.4"));
+    try testing.expectError(Ip6AddrParseError.EmbeddedIp4InvalidFormat, Ip6Addr.parse("1::1.200."));
+    try testing.expectError(Ip6AddrParseError.EmbeddedIp4InvalidFormat, Ip6Addr.parse("1::1.1.1"));
+
+    // too many segments
+    try testing.expectError(Ip6AddrParseError.TooManySegments, Ip6Addr.parse("1:2:3:4:5:6:7:8:9:10"));
+    try testing.expectError(Ip6AddrParseError.TooManySegments, Ip6Addr.parse("1:2:3:4:5::6:7:8:9:10"));
+    
+    // not enough segments
+    try testing.expectError(Ip6AddrParseError.NotEnoughSegments, Ip6Addr.parse("1:2:3"));
+    try testing.expectError(Ip6AddrParseError.NotEnoughSegments, Ip6Addr.parse("cafe:dead:beef"));
+    try testing.expectError(Ip6AddrParseError.NotEnoughSegments, Ip6Addr.parse("beef"));
+
+    // ambiguous ellipsis
+    try testing.expectError(Ip6AddrParseError.AmbiguousEllipsis, Ip6Addr.parse("1:2:3:4::5:6:7:8"));
 }
 
 test "Ip4 Address/get" {
