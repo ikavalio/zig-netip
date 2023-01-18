@@ -45,7 +45,7 @@ pub const Addr = packed struct {
 
     /// Create an address from the array of arbitrary integer values.
     /// Elements of the array are ordered in the network order (most-significant first).
-    /// Each integer value has the native byte order. 
+    /// Each integer value has the native byte order.
     pub fn fromArray(comptime E: type, a: [ValueType.size / @sizeOf(E)]E) Self {
         return Self{ .addr = ValueType.fromArray(E, a) };
     }
@@ -192,7 +192,7 @@ pub const Addr = packed struct {
         return self.addr.toArray(E);
     }
 
-    /// Get an arbitrary integer value from the address. 
+    /// Get an arbitrary integer value from the address.
     /// The value always has the native byte order.
     pub fn get(self: Self, comptime E: type, i: ValueType.PositionType) E {
         return self.addr.get(E, i);
@@ -304,6 +304,11 @@ pub const Addr = packed struct {
 
             try std.fmt.format(out_stream, fmt_seg, .{segs[i]});
         }
+    }
+
+    /// Compare two addresses.
+    pub fn order(self: Self, other: Self) math.Order {
+        return math.order(self.value(), other.value());
     }
 };
 
@@ -499,4 +504,14 @@ test "Ip6 Address/format" {
     try testing.expectFmt("10000000000001:110110111000::11", "{b}", .{try Addr.parse("2001:db8::3")});
     try testing.expectFmt("10000000000001:110110111000:0:0:0:0:0:11", "{bE}", .{try Addr.parse("2001:db8::3")});
     try testing.expectFmt("0010000000000001:0000110110111000::0000000000000011", "{B}", .{try Addr.parse("2001:db8::3")});
+}
+
+test "Ip6 Address/comparison" {
+    const addr1 = Addr.init(1);
+    const addr2 = Addr.init(2);
+
+    try testing.expectEqual(math.Order.eq, addr1.order(addr1));
+    try testing.expectEqual(math.Order.eq, addr2.order(addr2));
+    try testing.expectEqual(math.Order.lt, addr1.order(addr2));
+    try testing.expectEqual(math.Order.gt, addr2.order(addr1));
 }

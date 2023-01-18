@@ -115,7 +115,7 @@ pub const Addr = packed struct {
         return self.addr.toArray(E);
     }
 
-    /// Get an arbitrary integer value from the address. 
+    /// Get an arbitrary integer value from the address.
     /// The value always has the native byte order.
     pub fn get(self: Self, comptime E: type, i: ValueType.PositionType) E {
         return self.addr.get(E, i);
@@ -187,6 +187,11 @@ pub const Addr = packed struct {
             bs[2],
             bs[3],
         });
+    }
+
+    /// Compare two addresses.
+    pub fn order(self: Self, other: Self) math.Order {
+        return math.order(self.value(), other.value());
     }
 };
 
@@ -286,4 +291,14 @@ test "Ip4 Address/format" {
     try testing.expectFmt("c0.a8.01.01", "{X}", .{try Addr.parse("192.168.1.1")});
     try testing.expectFmt("11000000.10101000.1001001.1001000", "{b}", .{try Addr.parse("192.168.73.72")});
     try testing.expectFmt("11000000.10101000.01001001.01001000", "{B}", .{try Addr.parse("192.168.73.72")});
+}
+
+test "Ip4 Address/comparison" {
+    const addr1 = Addr.init(1);
+    const addr2 = Addr.init(2);
+
+    try testing.expectEqual(math.Order.eq, addr1.order(addr1));
+    try testing.expectEqual(math.Order.eq, addr2.order(addr2));
+    try testing.expectEqual(math.Order.lt, addr1.order(addr2));
+    try testing.expectEqual(math.Order.gt, addr2.order(addr1));
 }

@@ -16,8 +16,12 @@ pub fn build(b: *std.build.Builder) void {
     const ip6addr_test = b.addTest("src/ip6addr.zig");
     ip6addr_test.setBuildMode(mode);
 
+    const prefix_test = b.addTest("src/prefix.zig");
+    ip6addr_test.setBuildMode(mode);
+
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&ip4addr_test.step);
     test_step.dependOn(&ip6addr_test.step);
     test_step.dependOn(&example_test.step);
+    test_step.dependOn(&prefix_test.step);
 }

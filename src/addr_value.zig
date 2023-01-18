@@ -4,7 +4,7 @@ const math = std.math;
 const mem = std.mem;
 
 /// A generic type representing the IP address as a native-order integer.
-/// The type is a bit useless by itself, and should be wrapped into 
+/// The type is a bit useless by itself, and should be wrapped into
 /// something more high level.
 pub fn AddrValue(comptime T: type) type {
     if (T != u128 and T != u32) {
@@ -28,7 +28,7 @@ pub fn AddrValue(comptime T: type) type {
 
         /// Wrap a native-order integer value into AddrValue.
         pub inline fn init(v: T) Self {
-            return Self{.v = v};
+            return Self{ .v = v };
         }
 
         /// Create an AddrValue from the array of arbitrary integer values.
@@ -79,7 +79,7 @@ pub fn AddrValue(comptime T: type) type {
             return a;
         }
 
-        /// Get an arbitrary integer value from the address. 
+        /// Get an arbitrary integer value from the address.
         /// The value always has the native byte order.
         pub inline fn get(self: Self, comptime E: type, i: PositionType) E {
             return @truncate(E, self.v >> (@bitSizeOf(E) * (size / @sizeOf(E) - 1 - i)));

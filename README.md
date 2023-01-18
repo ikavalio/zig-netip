@@ -35,12 +35,11 @@ test "Ip6Addr Example" {
     const addr8 = addr3;
 
     // compare via values
-    try testing.expect(addr1.value() == addr2.value());
+    try testing.expectEqual(math.Order.eq, order(addr1, addr2));
+    try testing.expectEqual(math.Order.lt, order(addr1, addr8));
+    try testing.expectEqual(math.Order.gt, order(addr7, addr1));
     try testing.expect(addr3.value() == addr4.value());
-    try testing.expect(addr7.value() == addr6.value());
-    try testing.expect(addr1.value() != addr8.value());
     try testing.expect(addr4.value() != addr6.value());
-    try testing.expect(addr1.value() < addr3.value());
     try testing.expect(addr5.value() > addr4.value());
 
     // print
@@ -48,6 +47,18 @@ test "Ip6Addr Example" {
     try testing.expectFmt("2001:db8:0:0:0:0:0:2", "{xE}", .{addr3});
     try testing.expectFmt("2001:0db8::0003", "{X}", .{addr5});
     try testing.expectFmt("2001:0db8:0000:0000:0000:0000:0000:0001", "{XE}", .{addr2});
+}
+
+test "Ip6Prefix Example" {
+    // create a prefix
+    const prefix1 = Ip6Prefix.init(try Ip6Addr.parse("2001:db8::1"), 96);
+    const prefix2 = try Ip6Prefix.parse("2001:db8::/96");
+
+    // compare mask bits
+    try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
+
+    // handle parsing errors
+    try testing.expectError(PrefixParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
 }
 ```
 
@@ -73,12 +84,11 @@ test "Ip4Addr Example" {
     const addr8 = addr3;
 
     // compare via values
-    try testing.expect(addr1.value() == addr2.value());
+    try testing.expectEqual(math.Order.eq, order(addr1, addr2));
+    try testing.expectEqual(math.Order.lt, order(addr1, addr8));
+    try testing.expectEqual(math.Order.gt, order(addr7, addr1));
     try testing.expect(addr3.value() == addr4.value());
-    try testing.expect(addr7.value() == addr6.value());
-    try testing.expect(addr1.value() != addr8.value());
     try testing.expect(addr4.value() != addr6.value());
-    try testing.expect(addr1.value() < addr3.value());
     try testing.expect(addr5.value() > addr4.value());
 
     // print
@@ -86,4 +96,18 @@ test "Ip4Addr Example" {
     try testing.expectFmt("c0.00.02.02", "{X}", .{addr3});
     try testing.expectFmt("11000000.0.10.11", "{b}", .{addr5});
 }
+
+test "Ip4Prefix Example" {
+    // create a prefix
+    const prefix1 = Ip4Prefix.init(try Ip4Addr.parse("192.0.2.1"), 24);
+    const prefix2 = try Ip4Prefix.parse("192.0.2.1/24");
+
+    // compare mask bits
+    try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
+
+    // handle parsing errors
+    try testing.expectError(PrefixParseError.Overflow, Ip4Prefix.parse("192.0.2.1/42"));
+}
+
+
 ```
