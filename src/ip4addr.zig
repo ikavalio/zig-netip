@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const builtin = std.builtin;
-const assert = std.debug.assert;
 const math = std.math;
 const mem = std.mem;
 const net = std.net;
@@ -11,6 +9,7 @@ const addrlib = @import("./addr_value.zig");
 const util = @import("./utils.zig");
 const v6 = @import("./ip6addr.zig");
 
+/// IPv4 parsing errors.
 pub const ParseError = error{
     InvalidCharacter,
     LeadingZero,
@@ -20,25 +19,44 @@ pub const ParseError = error{
     Overflow,
 };
 
+/// IPv4 address.
 pub const Addr = packed struct {
     const Self = @This();
+    /// The underlying ValueType of the wrapped value.
     pub const ValueType = addrlib.AddrValue(u32);
 
     addr: ValueType,
 
+    /// Create an Addr directly from the value.
+    pub fn init(v: u32) Self {
+        return Self{ .addr = ValueType.init(v) };
+    }
+
+    /// Create an address from the array of arbitrary integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the network byte order.
     pub fn fromArrayNetOrder(comptime E: type, a: [ValueType.size / @sizeOf(E)]E) Self {
         return Self{ .addr = ValueType.fromArrayNetOrder(E, a) };
     }
 
+    /// Create an address from the array of arbitrary integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the native byte order.
     pub fn fromArray(comptime E: type, a: [ValueType.size / @sizeOf(E)]E) Self {
         return Self{ .addr = ValueType.fromArray(E, a) };
     }
 
+    /// Create an address from the std.net.Ip4Address.
+    /// The conversion is lossy and the port information
+    /// is discarded.
     pub fn fromNetAddress(a: net.Ip4Address) Self {
         const bs = @ptrCast(*const [4]u8, &a.sa.addr);
         return fromArrayNetOrder(u8, bs.*);
     }
 
+    /// Parse the address from the string representation.
+    /// The method supports only the standard representation of the
+    /// IPv4 address.
     pub fn parse(s: []const u8) ParseError!Self {
         var octs: [4]u8 = [_]u8{0} ** 4;
         var len: u8 = 0;
@@ -78,26 +96,40 @@ pub const Addr = packed struct {
         return fromArray(u8, octs);
     }
 
+    /// Returns the underlying address value.
     pub fn value(self: Self) u32 {
         return self.addr.v;
     }
 
+    /// Convert the address to an array of generic integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the network byte order.
     pub fn toArrayNetOrder(self: Self, comptime E: type) [ValueType.size / @sizeOf(E)]E {
         return self.addr.toArrayNetOrder(E);
     }
 
+    /// Convert the address to an array of generic integer values.
+    /// Elemenets of the array is ordered in the network order (most-significant first).
+    /// Each integer value has the native byte order.
     pub fn toArray(self: Self, comptime E: type) [ValueType.size / @sizeOf(E)]E {
         return self.addr.toArray(E);
     }
 
+    /// Get an arbitrary integer value from the address. 
+    /// The value always has the native byte order.
     pub fn get(self: Self, comptime E: type, i: ValueType.PositionType) E {
         return self.addr.get(E, i);
     }
 
-    pub fn toNetAddress(self: Self) net.Ip4Address {
-        return net.Ip4Address.init(self.toArrayNetOrder(u8), 0);
+    /// Convert the address to the std.net.Ip4Address.
+    /// Since the value doesn't carry port information,
+    /// it must be provided as an argument.
+    pub fn toNetAddress(self: Self, port: u16) net.Ip4Address {
+        return net.Ip4Address.init(self.toArrayNetOrder(u8), port);
     }
 
+    /// Returun an equivalent IPv4-mapped IPv6 address
+    /// in the '::ffff:0:0/96'.
     pub fn toIp6(self: Self) v6.Addr {
         return v6.Addr{ .addr = v6.Addr.ValueType{ .v = 0xffff00000000 | @as(u128, self.addr.v) } };
     }
@@ -129,6 +161,12 @@ pub const Addr = packed struct {
         return mode;
     }
 
+    /// Print the address. A number of non-standard (e.g. non-empty)
+    /// specifiers are supported:
+    ///  * x - will print all octets as hex numbers instead of base-10.
+    ///  * X - will do the same as 'x', but will also ensure that each value is padded.
+    ///  * b - will print all octets as binary numbers instead of base-10.
+    ///  * B - will do the same as 'b', but will also ensure that each value is padded.
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -175,7 +213,7 @@ test "Ip4 Address/fromArrayX" {
 test "Ip4 Address/toArrayX" {
     // 192 168 73 79 <-> c0 a8 49 3b
     const value: u32 = 0xc0a8493b;
-    const addr = Addr.fromArray(u32, [_]u32{value});
+    const addr = Addr.init(value);
     const out_u8 = [_]u8{ 0xc0, 0xa8, 0x49, 0x3b };
     const out_u16_native = [_]u16{ 0xc0a8, 0x493b };
     const out_u16_net = [_]u16{
@@ -233,7 +271,7 @@ test "Ip4 Address/convert to and from std.net.Ip4Address" {
 
     const addr = Addr.fromNetAddress(sys_addr);
     try testing.expectEqual(value, addr.value());
-    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress().sa.addr);
+    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress(5).sa.addr);
 }
 
 test "Ip4 Address/convert to Ip6 Address" {

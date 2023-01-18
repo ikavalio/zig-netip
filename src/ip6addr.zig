@@ -23,25 +23,45 @@ pub const ParseError = error{
     Overflow,
 };
 
+/// IPv6 parsing errors.
 pub const Addr = packed struct {
     const Self = @This();
+    /// The underlying ValueType of the wrapped value.
     pub const ValueType = addrlib.AddrValue(u128);
 
     addr: ValueType,
 
+    /// Create an Addr directly from the value.
+    pub fn init(v: u128) Self {
+        return Self{ .addr = ValueType.init(v) };
+    }
+
+    /// Create an address from the array of arbitrary integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the network byte order.
     pub fn fromArrayNetOrder(comptime E: type, a: [ValueType.size / @sizeOf(E)]E) Self {
         return Self{ .addr = ValueType.fromArrayNetOrder(E, a) };
     }
 
+    /// Create an address from the array of arbitrary integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the native byte order. 
     pub fn fromArray(comptime E: type, a: [ValueType.size / @sizeOf(E)]E) Self {
         return Self{ .addr = ValueType.fromArray(E, a) };
     }
 
+    /// Create an address from the std.net.Ip6Address.
+    /// The conversion is lossy and all information except the address itself
+    /// is discarded.
     pub fn fromNetAddress(a: net.Ip6Address) Self {
         const bs = @ptrCast(*const [16]u8, &a.sa.addr);
         return fromArray(u8, bs.*);
     }
 
+    /// Parse the address from the string representation.
+    /// The method supports only the standard representation of the
+    /// IPv6 address WITHOUT the zone identifier.
+    /// Use a separate type for dealing with scoped addresses.
     pub fn parse(input: []const u8) ParseError!Self {
         // parsing strategy is almost identical to https://pkg.go.dev/net/netip
 
@@ -153,26 +173,40 @@ pub const Addr = packed struct {
         return fromArray(u16, addr);
     }
 
+    /// Returns the underlying address value.
     pub fn value(self: Addr) u128 {
         return self.addr.v;
     }
 
+    /// Convert the address to an array of generic integer values.
+    /// Elements of the array are ordered in the network order (most-significant first).
+    /// Each integer value has the network byte order.
     pub fn toArrayNetOrder(self: Self, comptime E: type) [ValueType.size / @sizeOf(E)]E {
         return self.addr.toArrayNetOrder(E);
     }
 
+    /// Convert the address to an array of generic integer values.
+    /// Elemenets of the array is ordered in the network order (most-significant first).
+    /// Each integer value has the native byte order.
     pub fn toArray(self: Self, comptime E: type) [ValueType.size / @sizeOf(E)]E {
         return self.addr.toArray(E);
     }
 
+    /// Get an arbitrary integer value from the address. 
+    /// The value always has the native byte order.
     pub fn get(self: Self, comptime E: type, i: ValueType.PositionType) E {
         return self.addr.get(E, i);
     }
 
-    pub fn toNetAddress(self: Self) net.Ip6Address {
-        return net.Ip6Address.init(self.toArray(u8), 0, 0, 0);
+    /// Convert the address to the std.net.Ip4Address.
+    /// Since the value doesn't carry port information,
+    /// it must be provided as an argument.
+    pub fn toNetAddress(self: Self, port: u16) net.Ip6Address {
+        return net.Ip6Address.init(self.toArray(u8), port, 0, 0);
     }
 
+    /// Return an equivalent IPv4 address if the current address
+    /// is IPv4-mapped in the '::ffff:0:0/96'.
     pub fn toIp4(self: Self) ?v4.Addr {
         if (self.addr.v >> 32 != 0xffff) {
             return null;
@@ -221,6 +255,14 @@ pub const Addr = packed struct {
         return mode;
     }
 
+    /// Print the address. A number of non-standard (e.g. non-empty)
+    /// modifiers are supported:
+    ///  * x - will print all octets as hex numbers (that's the default).
+    ///  * X - will do the same as 'x', but will also ensure that each value is padded.
+    ///  * b - will print all octets as binary numbers instead of base-10.
+    ///  * B - will do the same as 'b', but will also ensure that each value is padded.
+    ///  * E - will print the address in the extended format (without ellipses '::').
+    /// 'E' modifier can be used with one of the other ones, e.g. like 'xE' or 'BE'.
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -294,7 +336,7 @@ test "Ip6 Address/fromArrayX" {
 test "Ip6 Address/toArrayX" {
     // 2001:db8::89ab:cdef
     const value: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
-    const addr = Addr.fromArray(u128, [_]u128{value});
+    const addr = Addr.init(value);
     const out_u8 = [16]u8{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0x89, 0xab, 0xcd, 0xef };
     const out_u16_native = [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef };
     const out_u16_net = [_]u16{
@@ -321,15 +363,15 @@ test "Ip6 Address/Parse" {
     try testing.expectEqual(@as(u128, 1), comp_time_one.value());
 
     // format tests
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("::")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0::0:0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("::0:0:0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0:0::")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0:0:0::0:0:0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0:0:0:0:0:0:0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0:0:0:0:0:0.0.0.0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("::0.0.0.0")));
-    try testing.expectEqual(Addr.fromArray(u128, [_]u128{0}), (try Addr.parse("0:0::0.0.0.0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("::")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0::0:0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("::0:0:0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0:0::")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0:0:0::0:0:0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0:0:0:0:0:0:0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0:0:0:0:0:0.0.0.0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("::0.0.0.0")));
+    try testing.expectEqual(Addr.init(0), (try Addr.parse("0:0::0.0.0.0")));
 
     // value tests
     try testing.expectEqual(
@@ -434,16 +476,16 @@ test "Ip6 Address/convert to and from std.net.Address" {
 
     const addr = Addr.fromNetAddress(sys_addr);
     try testing.expectEqual(value, addr.value());
-    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress().sa.addr);
+    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress(10).sa.addr);
 }
 
 test "Ip6 Address/convert to Ip4 Address" {
     const value: u128 = 0x00ffffc0a8494f;
     const eq_value: u32 = 0xc0a8494f;
-    try testing.expectEqual(eq_value, Addr.fromArray(u128, [_]u128{value}).toIp4().?.value());
+    try testing.expectEqual(eq_value, Addr.init(value).toIp4().?.value());
 
     const value1: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
-    try testing.expect(Addr.fromArray(u128, [_]u128{value1}).toIp4() == null);
+    try testing.expect(Addr.init(value1).toIp4() == null);
 }
 
 test "Ip6 Address/format" {

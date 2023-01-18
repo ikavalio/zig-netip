@@ -7,6 +7,9 @@ pub fn build(b: *std.build.Builder) void {
     lib.setBuildMode(mode);
     lib.install();
 
+    const example_test = b.addTest("src/netip.zig");
+    example_test.setBuildMode(mode);
+
     const ip4addr_test = b.addTest("src/ip4addr.zig");
     ip4addr_test.setBuildMode(mode);
 
@@ -16,4 +19,5 @@ pub fn build(b: *std.build.Builder) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&ip4addr_test.step);
     test_step.dependOn(&ip6addr_test.step);
+    test_step.dependOn(&example_test.step);
 }
