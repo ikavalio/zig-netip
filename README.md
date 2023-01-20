@@ -15,20 +15,20 @@ flexible-ish `format` specifiers.
 
 # Examples
 
-Check [the netip tests](../blob/main/src/netip.zig) for more.
+Check [the netip tests](../main/src/netip.zig) for more.
 
 ```zig
 test "Ip6Addr Example" {
     // create
     const addr1 = comptime try Ip6Addr.parse("2001:db8::1");
     const addr2 = try Ip6Addr.parse("2001:db8::1");
-    const addr3 = Ip6Addr.fromArray(u8, [_]u8{0x20, 0x1, 0xd, 0xb8, 0, 0, 0,0,0,0,0,0,0,0,0, 0x2});
-    const addr4 = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0,0,0,0,0, 0x2});
+    const addr3 = Ip6Addr.fromArray(u8, [_]u8{ 0x20, 0x1, 0xd, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x2 });
+    const addr4 = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x2 });
     const addr5 = Ip6Addr.init(0x2001_0db8_0000_0000_0000_0000_0000_0003);
     const addr6 = Ip6Addr.fromNetAddress(try std.net.Ip6Address.parse("2001:db8::3", 1));
 
     // handle parsing errors
-    try testing.expect(Ip6Addr.parse("-=_=-") == Ip6AddrParseError.InvalidCharacter);
+    try testing.expect(Ip6Addr.parse("-=_=-") == Ip6Addr.ParseError.InvalidCharacter);
 
     // copy
     const addr7 = addr5;
@@ -58,9 +58,9 @@ test "Ip6Prefix Example" {
     try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
 
     // handle parsing errors
-    try testing.expectError(PrefixParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
+    try testing.expectError(Ip6Prefix.ParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
 
-    // print 
+    // print
     try testing.expectFmt("2001:db8:85a3::1/48", "{}", .{prefix1});
     try testing.expectFmt("2001:0db8:85a3::0001/48", "{X}", .{prefix1});
     try testing.expectFmt("2001:db8:85a3::-2001:db8:85a3:ffff:ffff:ffff:ffff:ffff", "{R}", .{prefix1});

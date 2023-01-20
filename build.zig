@@ -10,18 +10,14 @@ pub fn build(b: *std.build.Builder) void {
     const example_test = b.addTest("src/netip.zig");
     example_test.setBuildMode(mode);
 
-    const ip4addr_test = b.addTest("src/ip4addr.zig");
-    ip4addr_test.setBuildMode(mode);
-
-    const ip6addr_test = b.addTest("src/ip6addr.zig");
-    ip6addr_test.setBuildMode(mode);
+    const addr_test = b.addTest("src/addr.zig");
+    addr_test.setBuildMode(mode);
 
     const prefix_test = b.addTest("src/prefix.zig");
-    ip6addr_test.setBuildMode(mode);
+    prefix_test.setBuildMode(mode);
 
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&ip4addr_test.step);
-    test_step.dependOn(&ip6addr_test.step);
+    test_step.dependOn(&addr_test.step);
     test_step.dependOn(&example_test.step);
     test_step.dependOn(&prefix_test.step);
 }

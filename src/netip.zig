@@ -13,17 +13,12 @@ pub fn order(a: anytype, b: anytype) math.Order {
     return a.order(b);
 }
 
-const v4addr = @import("./ip4addr.zig");
-const v6addr = @import("./ip6addr.zig");
+const addr = @import("./addr.zig");
 const prefix = @import("./prefix.zig");
 
-pub const Ip4AddrParseError = v4addr.ParseError;
-pub const Ip6AddrParseError = v6addr.ParseError;
+pub const Ip4Addr = addr.Ip4Addr;
+pub const Ip6Addr = addr.Ip6Addr;
 
-pub const Ip4Addr = v4addr.Addr;
-pub const Ip6Addr = v6addr.Addr;
-
-pub const PrefixParseError = prefix.ParseError;
 pub const PrefixInclusion = prefix.Inclusion;
 
 pub const Ip4Prefix = prefix.Ip4Prefix;
@@ -39,7 +34,7 @@ test "Ip4Addr Example" {
     const addr6 = Ip4Addr.fromNetAddress(try std.net.Ip4Address.parse("192.0.2.3", 1));
 
     // handle parsing errors
-    try testing.expect(Ip4Addr.parse("-=_=-") == Ip4AddrParseError.InvalidCharacter);
+    try testing.expect(Ip4Addr.parse("-=_=-") == Ip4Addr.ParseError.InvalidCharacter);
 
     // copy
     const addr7 = addr5;
@@ -69,7 +64,7 @@ test "Ip6Addr Example" {
     const addr6 = Ip6Addr.fromNetAddress(try std.net.Ip6Address.parse("2001:db8::3", 1));
 
     // handle parsing errors
-    try testing.expect(Ip6Addr.parse("-=_=-") == Ip6AddrParseError.InvalidCharacter);
+    try testing.expect(Ip6Addr.parse("-=_=-") == Ip6Addr.ParseError.InvalidCharacter);
 
     // copy
     const addr7 = addr5;
@@ -99,7 +94,7 @@ test "Ip6Prefix Example" {
     try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
 
     // handle parsing errors
-    try testing.expectError(PrefixParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
+    try testing.expectError(Ip6Prefix.ParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
 
     // print
     try testing.expectFmt("2001:db8:85a3::1/48", "{}", .{prefix1});
@@ -123,7 +118,7 @@ test "Ip4Prefix Example" {
     try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
 
     // handle parsing errors
-    try testing.expectError(PrefixParseError.Overflow, Ip4Prefix.parse("192.0.2.1/42"));
+    try testing.expectError(Ip4Prefix.ParseError.Overflow, Ip4Prefix.parse("192.0.2.1/42"));
 
     // print
     try testing.expectFmt("192.0.2.0/24", "{}", .{prefix1.canonical()});

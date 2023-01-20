@@ -5,12 +5,9 @@ const mem = std.mem;
 const testing = std.testing;
 const Signedness = std.builtin.Signedness;
 
-const v4 = @import("./ip4addr.zig");
-const v6 = @import("./ip6addr.zig");
-
-// that includes the Overflow and InvalidCharacter
-pub const ParseError = error{NoBitMask} || v4.ParseError || v6.ParseError;
-pub const InitError = error{Overflow};
+const addr = @import("./addr.zig");
+const Ip4Addr = addr.Ip4Addr;
+const Ip6Addr = addr.Ip6Addr;
 
 /// Inclusion relationship between 2 prefixes A and B
 /// (sets of IP addresses they define)
@@ -25,20 +22,28 @@ pub const Inclusion = enum {
     none,
 };
 
-pub fn Prefix(comptime T: type) type {
-    if (T != v4.Addr and T != v6.Addr) {
+/// A Prefix type constructor from the corresponding Addr type
+pub fn PrefixForAddrType(comptime T: type) type {
+    if (T != Ip4Addr and T != Ip6Addr) {
         @compileError("unknown address type '" ++ @typeName(T) ++ "' (only v4 and v6 addresses are supported)");
     }
 
-    const pos_bits = @typeInfo(T.ValueType.PositionType).Int.bits;
+    const pos_bits = @typeInfo(T.PositionType).Int.bits;
 
     return packed struct {
         const Self = @This();
-        const V = T.ValueType.InternalType;
+        const V = T.ValueType;
 
         // we need an extra bit to represent the widest mask, e.g. /32 for the v4 address
+        /// The type of the bits mask
         pub const MaskBitsType = std.meta.Int(Signedness.unsigned, pos_bits + 1);
-        pub const MaxMaskBits = 1 << pos_bits;
+        /// The type of wrapped address.
+        pub const AddrType = T;
+        /// Max allowed bit mask
+        pub const maxMaskBits = 1 << pos_bits;
+
+        // that includes the Overflow and InvalidCharacter
+        pub const ParseError = error{NoBitMask} || T.ParseError;
 
         addr: T,
         mask_bits: MaskBitsType,
@@ -46,18 +51,22 @@ pub fn Prefix(comptime T: type) type {
         /// Create a prefix from the given address and the number of bits.
         /// Following the go's netip implementation, we don't zero bits not
         /// covered by the mask.
-        /// The mask bits size must be <= address specific MaxMaskBits.
-        pub fn init(a: T, bits: MaskBitsType) InitError!Self {
-            if (bits > MaxMaskBits) {
-                return InitError.Overflow;
+        /// The mask bits size must be <= address specific maxMaskBits.
+        pub inline fn init(a: T, bits: MaskBitsType) !Self {
+            if (bits > maxMaskBits) {
+                return error.Overflow;
             }
+            return safeInit(a, bits);
+        }
+
+        inline fn safeInit(a: T, bits: MaskBitsType) Self {
             return Self{ .addr = a, .mask_bits = bits };
         }
 
         /// Create a new prefix with the same bit mask size as
         /// the given example prefix.
-        pub fn initAnother(a: T, example: Self) Self {
-            return Self{ .addr = a, .mask_bits = example.mask_bits };
+        pub inline fn initAnother(a: T, example: Self) Self {
+            return safeInit(a, example.mask_bits);
         }
 
         /// Parse the prefix from the string representation
@@ -78,7 +87,7 @@ pub fn Prefix(comptime T: type) type {
                     }
                 }
 
-                if (bits > MaxMaskBits) return ParseError.Overflow;
+                if (bits > maxMaskBits) return ParseError.Overflow;
 
                 return init(parsed, bits);
             }
@@ -87,12 +96,12 @@ pub fn Prefix(comptime T: type) type {
         }
 
         /// Returns underlying address.
-        pub fn addr(self: Self) T {
+        pub inline fn addr(self: Self) T {
             return self.addr;
         }
 
         /// Returns the number of bits in the mask
-        pub fn maskBits(self: Self) MaskBitsType {
+        pub inline fn maskBits(self: Self) MaskBitsType {
             return self.mask_bits;
         }
 
@@ -102,7 +111,7 @@ pub fn Prefix(comptime T: type) type {
         }
 
         /// Return the first and the last addresses in the prefix
-        pub fn addrRange(self: Self) [2]T {
+        pub inline fn addrRange(self: Self) [2]T {
             const first = self.addr.value() & self.mask();
             const last = first | ~self.mask();
 
@@ -111,7 +120,7 @@ pub fn Prefix(comptime T: type) type {
 
         /// Return the canonical representation of the prefix
         /// with all insignificant bits set to 0 (bits not covered by the mask).
-        pub fn canonical(self: Self) Self {
+        pub inline fn canonical(self: Self) Self {
             return Self{ .addr = T.init(self.addr.value() & self.mask()), .mask_bits = self.mask_bits };
         }
 
@@ -137,9 +146,9 @@ pub fn Prefix(comptime T: type) type {
         }
 
         /// Test the inclusion relationship between two prefixes.
-        pub fn testInclusion(self: Self, other: Self) Inclusion {
+        pub inline fn testInclusion(self: Self, other: Self) Inclusion {
             const common_mask = @min(self.mask_bits, other.mask_bits);
-            const related = math.shr(V, self.addr.value() ^ other.addr.value(), MaxMaskBits - common_mask) == 0;
+            const related = math.shr(V, self.addr.value() ^ other.addr.value(), maxMaskBits - common_mask) == 0;
             if (!related) {
                 return Inclusion.none;
             }
@@ -152,24 +161,62 @@ pub fn Prefix(comptime T: type) type {
         }
 
         /// Test if the address is within the range defined by the prefix.
-        pub fn containsAddr(self: Self, a: T) bool {
-            return math.shr(V, self.addr.value() ^ a.value(), MaxMaskBits - self.mask_bits) == 0;
+        pub inline fn containsAddr(self: Self, a: T) bool {
+            return math.shr(V, self.addr.value() ^ a.value(), maxMaskBits - self.mask_bits) == 0;
         }
 
         /// Two prefixes overlap if they are in the inclusion relationship
-        pub fn overlaps(self: Self, other: Self) bool {
+        pub inline fn overlaps(self: Self, other: Self) bool {
             return self.testInclusion(other) != Inclusion.none;
+        }
+
+        /// Convert between IPv4 and IPv6 prefixes
+        /// Use '::ffff:0:0/96' for IPv4 mapped addresses.
+        pub inline fn as(self: Self, comptime O: type) ?O {
+            if (Self == O) {
+                return self;
+            }
+
+            return switch (O.AddrType) {
+                Ip6Addr => O.safeInit(self.addr.as(Ip6Addr).?, O.maxMaskBits - maxMaskBits + @as(O.MaskBitsType, self.mask_bits)),
+                Ip4Addr => if (self.addr.as(Ip4Addr)) |a|
+                    O.safeInit(a, @truncate(O.MaskBitsType, self.mask_bits - (maxMaskBits - O.maxMaskBits)))
+                else
+                    null,
+                else => @compileError("unsupported prefix conversion from '" ++ @typeName(Self) ++ "' to '" ++ @typeName(O) + "'"),
+            };
         }
     };
 }
 
-pub const Ip4Prefix = Prefix(v4.Addr);
-pub const Ip6Prefix = Prefix(v6.Addr);
+pub const Ip4Prefix = PrefixForAddrType(Ip4Addr);
+pub const Ip6Prefix = PrefixForAddrType(Ip6Addr);
+
+pub const PrefixType = enum {
+    v4,
+    v6,
+};
+
+/// A union that allows to work with both prefix types.
+/// Only high-level operations are supported. Unwrap the concrete
+/// prefix type to do any sort of low-level or bit operations.
+pub const Prefix = union(PrefixType) {
+    v4: Ip4Prefix,
+    v6: Ip6Prefix,
+
+    pub fn fromIp4Prefix(p: Ip4Prefix) Prefix {
+        return Prefix{ .v4 = p };
+    }
+
+    pub fn fromIp6Prefix(p: Ip6Prefix) Prefix {
+        return Prefix{ .v6 = p };
+    }
+};
 
 test "Prefix/trivial init" {
-    const addr4 = v4.Addr.init(1);
-    const addr6 = v6.Addr.init(2);
-    const addr6_1 = v6.Addr.init(3);
+    const addr4 = Ip4Addr.init(1);
+    const addr6 = Ip6Addr.init(2);
+    const addr6_1 = Ip6Addr.init(3);
 
     try testing.expectEqual(Ip4Prefix{ .addr = addr4, .mask_bits = 3 }, try Ip4Prefix.init(addr4, 3));
     try testing.expectEqual(Ip6Prefix{ .addr = addr6, .mask_bits = 3 }, try Ip6Prefix.init(addr6, 3));
@@ -177,8 +224,8 @@ test "Prefix/trivial init" {
     const prefix = try Ip6Prefix.init(addr6, 32);
     try testing.expectEqual(Ip6Prefix{ .addr = addr6_1, .mask_bits = 32 }, Ip6Prefix.initAnother(addr6_1, prefix));
 
-    try testing.expectError(InitError.Overflow, Ip4Prefix.init(addr4, 33));
-    try testing.expectError(InitError.Overflow, Ip6Prefix.init(addr6, 129));
+    try testing.expectError(error.Overflow, Ip4Prefix.init(addr4, 33));
+    try testing.expectError(error.Overflow, Ip6Prefix.init(addr6, 129));
 
     try testing.expectEqual(u6, Ip4Prefix.MaskBitsType);
     try testing.expectEqual(u8, Ip6Prefix.MaskBitsType);
@@ -186,50 +233,50 @@ test "Prefix/trivial init" {
 
 test "Prefix/parse4" {
     try testing.expectEqual(
-        Ip4Prefix{ .addr = v4.Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 24 },
+        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 24 },
         try Ip4Prefix.parse("192.0.2.1/24"),
     );
 
     try testing.expectEqual(
-        Ip4Prefix{ .addr = v4.Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 0 },
+        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 0 },
         try Ip4Prefix.parse("192.0.2.1/0"),
     );
 
     try testing.expectEqual(
-        Ip4Prefix{ .addr = v4.Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 32 },
+        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 32 },
         try Ip4Prefix.parse("192.0.2.1/32"),
     );
 
-    try testing.expectError(ParseError.NotEnoughOctets, Ip4Prefix.parse("192.0.2/24"));
-    try testing.expectError(ParseError.NoBitMask, Ip4Prefix.parse("192.0.2/"));
-    try testing.expectError(ParseError.NoBitMask, Ip4Prefix.parse("192.0.2"));
-    try testing.expectError(ParseError.Overflow, Ip4Prefix.parse("192.0.2.1/33"));
-    try testing.expectError(ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/test"));
-    try testing.expectError(ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/-1"));
+    try testing.expectError(Ip4Prefix.ParseError.NotEnoughOctets, Ip4Prefix.parse("192.0.2/24"));
+    try testing.expectError(Ip4Prefix.ParseError.NoBitMask, Ip4Prefix.parse("192.0.2/"));
+    try testing.expectError(Ip4Prefix.ParseError.NoBitMask, Ip4Prefix.parse("192.0.2"));
+    try testing.expectError(Ip4Prefix.ParseError.Overflow, Ip4Prefix.parse("192.0.2.1/33"));
+    try testing.expectError(Ip4Prefix.ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/test"));
+    try testing.expectError(Ip4Prefix.ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/-1"));
 }
 
 test "Prefix/parse6" {
     try testing.expectEqual(
-        Ip6Prefix{ .addr = v6.Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 96 },
+        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 96 },
         try Ip6Prefix.parse("2001:db8::1/96"),
     );
 
     try testing.expectEqual(
-        Ip6Prefix{ .addr = v6.Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 0 },
+        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 0 },
         try Ip6Prefix.parse("2001:db8::1/0"),
     );
 
     try testing.expectEqual(
-        Ip6Prefix{ .addr = v6.Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 128 },
+        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 128 },
         try Ip6Prefix.parse("2001:db8::1/128"),
     );
 
-    try testing.expectError(ParseError.NotEnoughSegments, Ip6Prefix.parse("2001:db8:1/24"));
-    try testing.expectError(ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1/"));
-    try testing.expectError(ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1"));
-    try testing.expectError(ParseError.Overflow, Ip6Prefix.parse("2001:db8::1/129"));
-    try testing.expectError(ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/test"));
-    try testing.expectError(ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/-1"));
+    try testing.expectError(Ip6Prefix.ParseError.NotEnoughSegments, Ip6Prefix.parse("2001:db8:1/24"));
+    try testing.expectError(Ip6Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1/"));
+    try testing.expectError(Ip6Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1"));
+    try testing.expectError(Ip6Prefix.ParseError.Overflow, Ip6Prefix.parse("2001:db8::1/129"));
+    try testing.expectError(Ip6Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/test"));
+    try testing.expectError(Ip6Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/-1"));
 }
 
 test "Prefix/canonicalize" {
@@ -241,17 +288,17 @@ test "Prefix/canonicalize" {
 
 test "Prefix/addrRange" {
     try testing.expectEqual(
-        [2]v6.Addr{
-            try v6.Addr.parse("2001:0db8:85a3:0000:0000:0000:0000:0000"),
-            try v6.Addr.parse("2001:0db8:85a3:001f:ffff:ffff:ffff:ffff"),
+        [2]Ip6Addr{
+            try Ip6Addr.parse("2001:0db8:85a3:0000:0000:0000:0000:0000"),
+            try Ip6Addr.parse("2001:0db8:85a3:001f:ffff:ffff:ffff:ffff"),
         },
         (try Ip6Prefix.parse("2001:db8:85a3::8a2e:370:7334/59")).addrRange(),
     );
 
     try testing.expectEqual(
-        [2]v4.Addr{
-            try v4.Addr.parse("37.228.214.0"),
-            try v4.Addr.parse("37.228.215.255"),
+        [2]Ip4Addr{
+            try Ip4Addr.parse("37.228.214.0"),
+            try Ip4Addr.parse("37.228.215.255"),
         },
         (try Ip4Prefix.parse("37.228.215.135/23")).addrRange(),
     );
@@ -273,15 +320,15 @@ test "Prefix/format" {
 }
 
 test "Prefix/contansAddress" {
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/0")).containsAddr(try v4.Addr.parse("192.168.1.1")));
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/8")).containsAddr(try v4.Addr.parse("10.6.3.5")));
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/32")).containsAddr(try v4.Addr.parse("10.11.12.13")));
-    try testing.expect(!(try Ip4Prefix.parse("192.0.2.0/25")).containsAddr(try v4.Addr.parse("192.0.2.192")));
+    try testing.expect((try Ip4Prefix.parse("10.11.12.13/0")).containsAddr(try Ip4Addr.parse("192.168.1.1")));
+    try testing.expect((try Ip4Prefix.parse("10.11.12.13/8")).containsAddr(try Ip4Addr.parse("10.6.3.5")));
+    try testing.expect((try Ip4Prefix.parse("10.11.12.13/32")).containsAddr(try Ip4Addr.parse("10.11.12.13")));
+    try testing.expect(!(try Ip4Prefix.parse("192.0.2.0/25")).containsAddr(try Ip4Addr.parse("192.0.2.192")));
 
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/0")).containsAddr(try v6.Addr.parse("3001:db8::1")));
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/8")).containsAddr(try v6.Addr.parse("2002:db8::1")));
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/16")).containsAddr(try v6.Addr.parse("2001:db8::2")));
-    try testing.expect(!(try Ip6Prefix.parse("2001:db8::cafe:0/112")).containsAddr(try v6.Addr.parse("2001:db8::beef:7")));
+    try testing.expect((try Ip6Prefix.parse("2001:db8::/0")).containsAddr(try Ip6Addr.parse("3001:db8::1")));
+    try testing.expect((try Ip6Prefix.parse("2001:db8::/8")).containsAddr(try Ip6Addr.parse("2002:db8::1")));
+    try testing.expect((try Ip6Prefix.parse("2001:db8::/16")).containsAddr(try Ip6Addr.parse("2001:db8::2")));
+    try testing.expect(!(try Ip6Prefix.parse("2001:db8::cafe:0/112")).containsAddr(try Ip6Addr.parse("2001:db8::beef:7")));
 }
 
 test "Prefix/inclusion" {
@@ -334,4 +381,12 @@ test "Prefix/inclusion" {
 
     try testing.expectEqual(Inclusion.none, (try Ip6Prefix.parse("2001:db8:cafe::1/48")).testInclusion(try Ip6Prefix.parse("2001:db8:beef::1/48")));
     try testing.expect(!(try Ip6Prefix.parse("2001:db8:cafe::1/48")).overlaps(try Ip6Prefix.parse("2001:db8:beef::1/48")));
+}
+
+test "Prefix/conversion" {
+    try testing.expectEqual(try Ip6Prefix.parse("::ffff:0a0b:0c0d/112"), (try Ip4Prefix.parse("10.11.12.13/16")).as(Ip6Prefix).?);
+    try testing.expectEqual(try Ip6Prefix.parse("::ffff:0a0b:0c0d/128"), (try Ip4Prefix.parse("10.11.12.13/32")).as(Ip6Prefix).?);
+    try testing.expectEqual(try Ip4Prefix.parse("10.11.12.13/16"), (try Ip6Prefix.parse("::ffff:0a0b:0c0d/112")).as(Ip4Prefix).?);
+    try testing.expectEqual(try Ip4Prefix.parse("10.11.12.13/32"), (try Ip6Prefix.parse("::ffff:0a0b:0c0d/128")).as(Ip4Prefix).?);
+    try testing.expect(null == (try Ip6Prefix.parse("2001::ffff:0a0b:0c0d/48")).as(Ip4Prefix));
 }
