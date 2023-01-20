@@ -17,6 +17,8 @@ pub fn AddrValue(comptime T: type) type {
     return packed struct {
         const Self = @This();
 
+        /// The internal type of the address.
+        pub const InternalType = T;
         /// The integer type that can be used in shl/shr instructions
         /// The type can store any bit index of the parent type.
         pub const PositionType = math.Log2Int(T);

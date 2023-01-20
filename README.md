@@ -5,15 +5,15 @@ using zig idioms and comptime features.
 
 # Definitions
 
-* `Ip4Addr`, `I6Addr` address types that're small value types.
+* `Ip4Addr`, `Ip6Addr` address types that're small value types.
 They can be converted to `std.net.Ip4Address` or 
 `std.net.Ip6Address`. Both types have a bunch of comptime 
 friendly methods, e.g. `parse`, `get`, `toArray`, and 
 flexible-ish `format` specifiers.
+* `Ip4Prefix`, `Ip6Prefix` address types that're built on top of 
+`Ip4Addr` and `Ip6Addr` abstractions.
 
-# Examples: 
-
-## IPv6 Basic Operations
+# Examples
 
 Check [the netip tests](../blob/main/src/netip.zig) for more.
 
@@ -51,63 +51,25 @@ test "Ip6Addr Example" {
 
 test "Ip6Prefix Example" {
     // create a prefix
-    const prefix1 = Ip6Prefix.init(try Ip6Addr.parse("2001:db8::1"), 96);
-    const prefix2 = try Ip6Prefix.parse("2001:db8::/96");
+    const prefix1 = try Ip6Prefix.init(try Ip6Addr.parse("2001:db8:85a3::1"), 48);
+    const prefix2 = try Ip6Prefix.parse("2001:db8:85a3::/48");
 
     // compare mask bits
     try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
 
     // handle parsing errors
     try testing.expectError(PrefixParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
+
+    // print 
+    try testing.expectFmt("2001:db8:85a3::1/48", "{}", .{prefix1});
+    try testing.expectFmt("2001:0db8:85a3::0001/48", "{X}", .{prefix1});
+    try testing.expectFmt("2001:db8:85a3::-2001:db8:85a3:ffff:ffff:ffff:ffff:ffff", "{R}", .{prefix1});
+
+    // contains address
+    try testing.expect(prefix1.containsAddr(try Ip6Addr.parse("2001:db8:85a3:cafe::efac")));
+
+    // inclusion and overlap test
+    try testing.expectEqual(PrefixInclusion.sub, prefix1.testInclusion(try Ip6Prefix.parse("2001:db8::/32")));
+    try testing.expect(prefix2.overlaps(try Ip6Prefix.parse("2001:db8::/32")));
 }
-```
-
-## IPv4 Basic Operations
-
-Check [the netip tests](../blob/main/src/netip.zig) for more.
-
-```zig
-test "Ip4Addr Example" {
-    // create
-    const addr1 = comptime try Ip4Addr.parse("192.0.2.1");
-    const addr2 = try Ip4Addr.parse("192.0.2.1");
-    const addr3 = Ip4Addr.fromArray(u8, [_]u8{192,0,2,2});
-    const addr4 = Ip4Addr.fromArray(u16, [_]u16{ 0xC000, 0x0202});
-    const addr5 = Ip4Addr.init(0xC0000203);
-    const addr6 = Ip4Addr.fromNetAddress(try std.net.Ip4Address.parse("192.0.2.3", 1));
-
-    // handle parsing errors
-    try testing.expect(Ip4Addr.parse("-=_=-") == Ip4AddrParseError.InvalidCharacter);
-
-    // copy
-    const addr7 = addr5;
-    const addr8 = addr3;
-
-    // compare via values
-    try testing.expectEqual(math.Order.eq, order(addr1, addr2));
-    try testing.expectEqual(math.Order.lt, order(addr1, addr8));
-    try testing.expectEqual(math.Order.gt, order(addr7, addr1));
-    try testing.expect(addr3.value() == addr4.value());
-    try testing.expect(addr4.value() != addr6.value());
-    try testing.expect(addr5.value() > addr4.value());
-
-    // print
-    try testing.expectFmt("192.0.2.1", "{}", .{addr1});
-    try testing.expectFmt("c0.00.02.02", "{X}", .{addr3});
-    try testing.expectFmt("11000000.0.10.11", "{b}", .{addr5});
-}
-
-test "Ip4Prefix Example" {
-    // create a prefix
-    const prefix1 = Ip4Prefix.init(try Ip4Addr.parse("192.0.2.1"), 24);
-    const prefix2 = try Ip4Prefix.parse("192.0.2.1/24");
-
-    // compare mask bits
-    try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
-
-    // handle parsing errors
-    try testing.expectError(PrefixParseError.Overflow, Ip4Prefix.parse("192.0.2.1/42"));
-}
-
-
 ```

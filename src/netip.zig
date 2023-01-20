@@ -3,10 +3,11 @@ const testing = std.testing;
 const math = std.math;
 
 // TODO:
-// 1. Ip6AddrScoped
-// 2. Ip4Prefix
-// 3. Ip6Prefix
-// 4. Data structures?
+// - Ip6AddrScoped
+// - Aggregate Addr type
+// - Prefix Set/Map
+// - Well known addresses and prefixes
+// - Data structures
 
 pub fn order(a: anytype, b: anytype) math.Order {
     return a.order(b);
@@ -23,6 +24,7 @@ pub const Ip4Addr = v4addr.Addr;
 pub const Ip6Addr = v6addr.Addr;
 
 pub const PrefixParseError = prefix.ParseError;
+pub const PrefixInclusion = prefix.Inclusion;
 
 pub const Ip4Prefix = prefix.Ip4Prefix;
 pub const Ip6Prefix = prefix.Ip6Prefix;
@@ -90,19 +92,31 @@ test "Ip6Addr Example" {
 
 test "Ip6Prefix Example" {
     // create a prefix
-    const prefix1 = Ip6Prefix.init(try Ip6Addr.parse("2001:db8::1"), 96);
-    const prefix2 = try Ip6Prefix.parse("2001:db8::/96");
+    const prefix1 = try Ip6Prefix.init(try Ip6Addr.parse("2001:db8:85a3::1"), 48);
+    const prefix2 = try Ip6Prefix.parse("2001:db8:85a3::/48");
 
     // compare mask bits
     try testing.expectEqual(prefix1.maskBits(), prefix2.maskBits());
 
     // handle parsing errors
     try testing.expectError(PrefixParseError.Overflow, Ip6Prefix.parse("2001:db8::/256"));
+
+    // print
+    try testing.expectFmt("2001:db8:85a3::1/48", "{}", .{prefix1});
+    try testing.expectFmt("2001:0db8:85a3::0001/48", "{X}", .{prefix1});
+    try testing.expectFmt("2001:db8:85a3::-2001:db8:85a3:ffff:ffff:ffff:ffff:ffff", "{R}", .{prefix1});
+
+    // contains address
+    try testing.expect(prefix1.containsAddr(try Ip6Addr.parse("2001:db8:85a3:cafe::efac")));
+
+    // inclusion and overlap test
+    try testing.expectEqual(PrefixInclusion.sub, prefix1.testInclusion(try Ip6Prefix.parse("2001:db8::/32")));
+    try testing.expect(prefix2.overlaps(try Ip6Prefix.parse("2001:db8::/32")));
 }
 
 test "Ip4Prefix Example" {
     // create a prefix
-    const prefix1 = Ip4Prefix.init(try Ip4Addr.parse("192.0.2.1"), 24);
+    const prefix1 = try Ip4Prefix.init(try Ip4Addr.parse("192.0.2.1"), 24);
     const prefix2 = try Ip4Prefix.parse("192.0.2.1/24");
 
     // compare mask bits
@@ -110,4 +124,15 @@ test "Ip4Prefix Example" {
 
     // handle parsing errors
     try testing.expectError(PrefixParseError.Overflow, Ip4Prefix.parse("192.0.2.1/42"));
+
+    // print
+    try testing.expectFmt("192.0.2.0/24", "{}", .{prefix1.canonical()});
+    try testing.expectFmt("192.0.2.0-192.0.2.255", "{R}", .{prefix1});
+
+    // contains address
+    try testing.expect(prefix1.containsAddr(try Ip4Addr.parse("192.0.2.42")));
+
+    // inclusion and overlap test
+    try testing.expectEqual(PrefixInclusion.sub, prefix1.testInclusion(try Ip4Prefix.parse("192.0.2.0/16")));
+    try testing.expect(prefix2.overlaps(try Ip4Prefix.parse("192.0.2.0/16")));
 }

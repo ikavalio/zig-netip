@@ -276,28 +276,29 @@ pub const Addr = packed struct {
 
         const segs = self.toArray(u16);
 
-        var zero_start: u8 = 255;
-        var zero_end: u8 = 255;
-        var rlen: u8 = 0;
+        var zero_start: usize = 255;
+        var zero_end: usize = 255;
 
-        for (segs) |c, i| {
-            switch (c) {
-                0 => rlen += 1,
-                else => {
-                    if (rlen > 0 and rlen > zero_end - zero_start) {
-                        zero_end = @truncate(u8, i);
-                        zero_start = zero_end - rlen;
-                    }
-                    rlen = 0;
-                },
+        var i: usize = 0;
+        while (i < segs.len) : (i += 1) {
+            var j = i;
+            while (j < segs.len and segs[j] == 0) : (j += 1) {}
+            var l = j - i;
+            if (l > 1 and l > zero_end - zero_start) {
+                zero_start = i;
+                zero_end = j;
             }
+            i = j;
         }
 
-        var i: u8 = 0;
+        i = 0;
         while (i < segs.len) : (i += 1) {
             if (!mode.expand and i == zero_start) {
                 try out_stream.writeAll("::");
                 i = zero_end;
+                if (i >= segs.len) {
+                    break;
+                }
             } else if (i > 0) {
                 try out_stream.writeAll(":");
             }
@@ -495,6 +496,9 @@ test "Ip6 Address/convert to Ip4 Address" {
 
 test "Ip6 Address/format" {
     try testing.expectFmt("2001:db8::89ab:cdef", "{}", .{try Addr.parse("2001:db8::89ab:cdef")});
+    try testing.expectFmt("2001:db8::", "{}", .{try Addr.parse("2001:db8::")});
+    try testing.expectFmt("::1", "{}", .{try Addr.parse("::1")});
+    try testing.expectFmt("::", "{}", .{try Addr.parse("::")});
 
     try testing.expectFmt("2001:db8::89ab:cdef", "{x}", .{try Addr.parse("2001:db8::89ab:cdef")});
     try testing.expectFmt("2001:db8:0:0:0:0:89ab:cdef", "{xE}", .{try Addr.parse("2001:db8::89ab:cdef")});
