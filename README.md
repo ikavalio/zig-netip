@@ -3,14 +3,16 @@
 This is mostly an educational project to implement a library similar to go's [netip](https://pkg.go.dev/net/netip) 
 using zig idioms and comptime features. 
 
+The library works with zig `0.10.0`.
+
 # Definitions
 
-* `Ip4Addr`, `Ip6Addr` address types that're small value types.
+* `Ip4Addr`, `Ip6Addr` (and an `Addr` union) address types that're small value types.
 They can be converted to `std.net.Ip4Address` or 
 `std.net.Ip6Address`. Both types have a bunch of comptime 
 friendly methods, e.g. `parse`, `get`, `toArray`, and 
 flexible-ish `format` specifiers.
-* `Ip4Prefix`, `Ip6Prefix` address types that're built on top of 
+* `Ip4Prefix`, `Ip6Prefix` (and a `Prefix` union) address types that're built on top of 
 `Ip4Addr` and `Ip6Addr` abstractions.
 
 # Examples

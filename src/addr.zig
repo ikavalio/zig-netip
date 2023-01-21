@@ -35,7 +35,7 @@ const ip4 = struct {
         return StdlibType.init(v, port);
     }
 
-    fn parse(s: []const u8) ParseError![@sizeOf(BaseType) / @sizeOf(ParseElementType)]ParseElementType {
+    inline fn parse(s: []const u8) ParseError![@sizeOf(BaseType) / @sizeOf(ParseElementType)]ParseElementType {
         var octs: [4]u8 = [_]u8{0} ** 4;
         var len: u8 = 0;
         var ix: u8 = 0;
@@ -287,14 +287,14 @@ pub fn AddrForValue(comptime M: type) type {
         v: ValueType,
 
         /// Wrap a native-order integer value into AddrValue.
-        pub inline fn init(v: ValueType) Self {
+        pub fn init(v: ValueType) Self {
             return Self{ .v = v };
         }
 
         /// Create an AddrValue from the array of arbitrary integer values.
         /// Elements of the array are ordered in the network order (most-significant first).
         /// Each integer value has the network byte order.
-        pub inline fn fromArrayNetOrder(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
+        pub fn fromArrayNetOrder(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
             const p = @ptrCast(*align(@alignOf(u8)) const [byte_size / @sizeOf(u8)]u8, &a);
             const v = mem.bigToNative(ValueType, mem.bytesToValue(ValueType, p));
             return Self{ .v = v };
@@ -303,7 +303,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// Create an AddrValue from the array of arbitrary integer values.
         /// Elements of the array are ordered in the network order (most-significant first).
         /// Each integer value has the native byte order.
-        pub inline fn fromArray(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
+        pub fn fromArray(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
             var v: ValueType = 0;
 
             inline for (a) |b, i| {
@@ -316,7 +316,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// Create an address from the associated stdlib type.
         /// The conversion is lossy and the port information
         /// is discarded.
-        pub inline fn fromNetAddress(a: StdlibType) Self {
+        pub fn fromNetAddress(a: StdlibType) Self {
             const bs = @ptrCast(*const [byte_size]u8, &a.sa.addr);
             return fromArrayNetOrder(u8, bs.*);
         }
@@ -331,14 +331,14 @@ pub fn AddrForValue(comptime M: type) type {
         }
 
         /// Returns the underlying address value.
-        pub inline fn value(self: Self) ValueType {
+        pub fn value(self: Self) ValueType {
             return self.v;
         }
 
         /// Convert the AddrValue to an array of generic integer values.
         /// Elements of the array are ordered in the network order (most-significant first).
         /// Each integer value has the network byte order.
-        pub inline fn toArrayNetOrder(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
+        pub fn toArrayNetOrder(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
             var a = self.toArray(E);
 
             inline for (a) |b, i| {
@@ -351,7 +351,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// Convert the address to an array of generic integer values.
         /// Elemenets of the array is ordered in the network order (most-significant first).
         /// Each integer value has the native byte order.
-        pub inline fn toArray(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
+        pub fn toArray(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
             var a: [byte_size / @sizeOf(E)]E = undefined;
 
             inline for (a) |_, i| {
@@ -364,13 +364,13 @@ pub fn AddrForValue(comptime M: type) type {
         /// Convert the address to the corresponding stdlib equivalent.
         /// Since the value doesn't carry port information,
         /// it must be provided as an argument.
-        pub inline fn toNetAddress(self: Self, port: u16) StdlibType {
+        pub fn toNetAddress(self: Self, port: u16) StdlibType {
             return M.convertToStdlibAddress(self.toArrayNetOrder(u8), port);
         }
 
         /// Get an arbitrary integer value from the address.
         /// The value always has the native byte order.
-        pub inline fn get(self: Self, comptime E: type, i: PositionType) E {
+        pub fn get(self: Self, comptime E: type, i: PositionType) E {
             return @truncate(E, self.v >> (@bitSizeOf(E) * (byte_size / @sizeOf(E) - 1 - i)));
         }
 
@@ -424,13 +424,13 @@ pub fn AddrForValue(comptime M: type) type {
         }
 
         /// Compare two addresses.
-        pub inline fn order(self: Self, other: Self) math.Order {
+        pub fn order(self: Self, other: Self) math.Order {
             return math.order(self.value(), other.value());
         }
 
         /// Convert between IPv4 and IPv6 addresses
         /// Use '::ffff:0:0/96' for IPv4 mapped addresses.
-        pub inline fn as(self: Self, comptime O: type) ?O {
+        pub fn as(self: Self, comptime O: type) ?O {
             if (Self == O) {
                 return self;
             }
@@ -461,11 +461,11 @@ pub const Addr = union(AddrType) {
 
     pub const ParseError = error{UnknownAddress} || Ip4Addr.ParseError || Ip6Addr.ParseError;
 
-    pub inline fn init4(a: Ip4Addr) Addr {
+    pub fn init4(a: Ip4Addr) Addr {
         return Addr{ .v4 = a };
     }
 
-    pub inline fn init6(a: Ip6Addr) Addr {
+    pub fn init6(a: Ip6Addr) Addr {
         return Addr{ .v6 = a };
     }
 
@@ -485,7 +485,7 @@ pub const Addr = union(AddrType) {
     /// Create an Addr from the std.net.Address.
     /// The conversion is lossy and some information
     /// is discarded.
-    pub inline fn fromNetAddress(a: std.net.Address) ?Addr {
+    pub fn fromNetAddress(a: std.net.Address) ?Addr {
         return switch (a.any.family) {
             os.AF.INET => Addr{ .v4 = Ip4Addr.fromNetAddress(a.in) },
             os.AF.INET6 => Addr{ .v6 = Ip6Addr.fromNetAddress(a.in6) },
@@ -494,7 +494,7 @@ pub const Addr = union(AddrType) {
     }
 
     /// Return the equivalent IPv6 address.
-    pub inline fn as6(self: Addr) Addr {
+    pub fn as6(self: Addr) Addr {
         return switch (self) {
             .v4 => |a| Addr{ .v6 = a.as(Ip6Addr).? },
             .v6 => self,
@@ -502,7 +502,7 @@ pub const Addr = union(AddrType) {
     }
 
     /// Return the equivalent IPv4 address if it exists.
-    pub inline fn as4(self: Addr) ?Addr {
+    pub fn as4(self: Addr) ?Addr {
         return switch (self) {
             .v4 => self,
             .v6 => |a| (if (a.as(Ip4Addr)) |p| Addr{ .v4 = p } else null),
@@ -525,7 +525,7 @@ pub const Addr = union(AddrType) {
     /// Convert the address to the equivalent std.net.Address.
     /// Since the value doesn't carry port information,
     /// it must be provided as an argument.
-    pub inline fn toNetAddress(self: Addr, port: u16) std.net.Address {
+    pub fn toNetAddress(self: Addr, port: u16) std.net.Address {
         return switch (self) {
             .v4 => |a| std.net.Address{ .in = a.toNetAddress(port) },
             .v6 => |a| std.net.Address{ .in6 = a.toNetAddress(port) },
@@ -533,7 +533,7 @@ pub const Addr = union(AddrType) {
     }
 
     /// Compare two addresses. IPv4 is always less than IPv6
-    pub inline fn order(self: Addr, other: Addr) math.Order {
+    pub fn order(self: Addr, other: Addr) math.Order {
         return switch (self) {
             .v4 => |l4| switch (other) {
                 .v4 => |r4| l4.order(r4),

@@ -53,7 +53,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
         /// Following the go's netip implementation, we don't zero bits not
         /// covered by the mask.
         /// The mask bits size must be <= address specific maxMaskBits.
-        pub inline fn init(a: T, bits: MaskBitsType) !Self {
+        pub fn init(a: T, bits: MaskBitsType) !Self {
             if (bits > maxMaskBits) {
                 return error.Overflow;
             }
@@ -67,7 +67,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
 
         /// Create a new prefix with the same bit mask size as
         /// the given example prefix.
-        pub inline fn initAnother(self: Self, a: T) Self {
+        pub fn initAnother(self: Self, a: T) Self {
             return safeInit(a, self.mask_bits);
         }
 
@@ -98,12 +98,12 @@ pub fn PrefixForAddrType(comptime T: type) type {
         }
 
         /// Returns underlying address.
-        pub inline fn addr(self: Self) T {
+        pub fn addr(self: Self) T {
             return self.addr;
         }
 
         /// Returns the number of bits in the mask
-        pub inline fn maskBits(self: Self) MaskBitsType {
+        pub fn maskBits(self: Self) MaskBitsType {
             return self.mask_bits;
         }
 
@@ -113,7 +113,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
         }
 
         /// Return the first and the last addresses in the prefix
-        pub inline fn addrRange(self: Self) [2]T {
+        pub fn addrRange(self: Self) [2]T {
             const first = self.addr.value() & self.mask();
             const last = first | ~self.mask();
 
@@ -122,7 +122,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
 
         /// Return the canonical representation of the prefix
         /// with all insignificant bits set to 0 (bits not covered by the mask).
-        pub inline fn canonical(self: Self) Self {
+        pub fn canonical(self: Self) Self {
             return self.initAnother(T.init(self.addr.value() & self.mask()));
         }
 
@@ -148,7 +148,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
         }
 
         /// Test the inclusion relationship between two prefixes.
-        pub inline fn testInclusion(self: Self, other: Self) Inclusion {
+        pub fn testInclusion(self: Self, other: Self) Inclusion {
             const common_mask = @min(self.mask_bits, other.mask_bits);
             const related = math.shr(V, self.addr.value() ^ other.addr.value(), maxMaskBits - common_mask) == 0;
             if (!related) {
@@ -163,18 +163,18 @@ pub fn PrefixForAddrType(comptime T: type) type {
         }
 
         /// Test if the address is within the range defined by the prefix.
-        pub inline fn containsAddr(self: Self, a: T) bool {
+        pub fn containsAddr(self: Self, a: T) bool {
             return math.shr(V, self.addr.value() ^ a.value(), maxMaskBits - self.mask_bits) == 0;
         }
 
         /// Two prefixes overlap if they are in the inclusion relationship
-        pub inline fn overlaps(self: Self, other: Self) bool {
+        pub fn overlaps(self: Self, other: Self) bool {
             return self.testInclusion(other) != Inclusion.none;
         }
 
         /// Convert between IPv4 and IPv6 prefixes
         /// Use '::ffff:0:0/96' for IPv4 mapped addresses.
-        pub inline fn as(self: Self, comptime O: type) ?O {
+        pub fn as(self: Self, comptime O: type) ?O {
             if (Self == O) {
                 return self;
             }
@@ -223,7 +223,7 @@ pub const Prefix = union(PrefixType) {
 
     /// Return the canonical representation of the prefix
     /// with all insignificant bits set to 0 (bits not covered by the mask).
-    pub inline fn canonical(self: Prefix) Prefix {
+    pub fn canonical(self: Prefix) Prefix {
         return switch (self) {
             .v4 => |a| Prefix{ .v4 = a.canonical() },
             .v6 => |a| Prefix{ .v6 = a.canonical() },
@@ -231,7 +231,7 @@ pub const Prefix = union(PrefixType) {
     }
 
     /// Return the equivalent IPv6 prefix.
-    pub inline fn as6(self: Prefix) Prefix {
+    pub fn as6(self: Prefix) Prefix {
         return switch (self) {
             .v4 => |a| Prefix{ .v6 = a.as(Ip6Prefix).? },
             .v6 => self,
@@ -239,7 +239,7 @@ pub const Prefix = union(PrefixType) {
     }
 
     /// Return the equivalent IPv4 prefix if it exists.
-    pub inline fn as4(self: Prefix) ?Prefix {
+    pub fn as4(self: Prefix) ?Prefix {
         return switch (self) {
             .v4 => self,
             .v6 => |a| (if (a.as(Ip4Prefix)) |p| Prefix{ .v4 = p } else null),
@@ -248,7 +248,7 @@ pub const Prefix = union(PrefixType) {
 
     /// Test the inclusion relationship between two prefixes.
     /// Any IPv6 prefix is not related to the IPv4 prefix or vice-versa.
-    pub inline fn testInclusion(self: Prefix, other: Prefix) Inclusion {
+    pub fn testInclusion(self: Prefix, other: Prefix) Inclusion {
         return switch (self) {
             .v4 => |l4| switch (other) {
                 .v4 => |r4| l4.testInclusion(r4),
@@ -263,7 +263,7 @@ pub const Prefix = union(PrefixType) {
 
     /// Two prefixes overlap if they are in the inclusion relationship.
     /// Prefixes from different families do not overlap.
-    pub inline fn overlaps(self: Prefix, other: Prefix) bool {
+    pub fn overlaps(self: Prefix, other: Prefix) bool {
         return switch (self) {
             .v4 => |l4| switch (other) {
                 .v4 => |r4| l4.overlaps(r4),
@@ -279,7 +279,7 @@ pub const Prefix = union(PrefixType) {
     /// Test if the address is within the range defined by the prefix.
     /// If prefix and the address are from different families, the result
     /// is always false.
-    pub inline fn containsAddr(self: Prefix, a: Addr) bool {
+    pub fn containsAddr(self: Prefix, a: Addr) bool {
         return switch (self) {
             .v4 => |l4| switch (a) {
                 .v4 => |r4| l4.containsAddr(r4),
