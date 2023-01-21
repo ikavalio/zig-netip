@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 const math = std.math;
 const mem = std.mem;
 const net = std.net;
+const os = std.os;
 const testing = std.testing;
 
 // common address format options
@@ -446,6 +447,106 @@ pub fn AddrForValue(comptime M: type) type {
 pub const Ip4Addr = AddrForValue(ip4);
 pub const Ip6Addr = AddrForValue(ip6);
 
+pub const AddrType = enum {
+    v4,
+    v6,
+};
+
+/// A union type that allows to work with both address types at the same time.
+/// Only high-level operations are supported. Unwrap the concrete
+/// prefix type to do any sort of low-level or bit operations.
+pub const Addr = union(AddrType) {
+    v4: Ip4Addr,
+    v6: Ip6Addr,
+
+    pub const ParseError = error{UnknownAddress} || Ip4Addr.ParseError || Ip6Addr.ParseError;
+
+    pub inline fn init4(a: Ip4Addr) Addr {
+        return Addr{ .v4 = a };
+    }
+
+    pub inline fn init6(a: Ip6Addr) Addr {
+        return Addr{ .v6 = a };
+    }
+
+    /// Parse the address from the string representation
+    pub fn parse(s: []const u8) ParseError!Addr {
+        for (s) |c| {
+            switch (c) {
+                '.' => return Addr{ .v4 = try Ip4Addr.parse(s) },
+                ':' => return Addr{ .v6 = try Ip6Addr.parse(s) },
+                else => continue,
+            }
+        }
+
+        return ParseError.UnknownAddress;
+    }
+
+    /// Create an Addr from the std.net.Address.
+    /// The conversion is lossy and some information
+    /// is discarded.
+    pub inline fn fromNetAddress(a: std.net.Address) ?Addr {
+        return switch (a.any.family) {
+            os.AF.INET => Addr{ .v4 = Ip4Addr.fromNetAddress(a.in) },
+            os.AF.INET6 => Addr{ .v6 = Ip6Addr.fromNetAddress(a.in6) },
+            else => null,
+        };
+    }
+
+    /// Return the equivalent IPv6 address.
+    pub inline fn as6(self: Addr) Addr {
+        return switch (self) {
+            .v4 => |a| Addr{ .v6 = a.as(Ip6Addr).? },
+            .v6 => self,
+        };
+    }
+
+    /// Return the equivalent IPv4 address if it exists.
+    pub inline fn as4(self: Addr) ?Addr {
+        return switch (self) {
+            .v4 => self,
+            .v6 => |a| (if (a.as(Ip4Addr)) |p| Addr{ .v4 = p } else null),
+        };
+    }
+
+    /// Print the address. The modifier is passed to either Ip4Addr or Ip6Addr unchanged.
+    pub fn format(
+        self: Addr,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        out_stream: anytype,
+    ) !void {
+        switch (self) {
+            .v4 => |a| try a.format(fmt, options, out_stream),
+            .v6 => |a| try a.format(fmt, options, out_stream),
+        }
+    }
+
+    /// Convert the address to the equivalent std.net.Address.
+    /// Since the value doesn't carry port information,
+    /// it must be provided as an argument.
+    pub inline fn toNetAddress(self: Addr, port: u16) std.net.Address {
+        return switch (self) {
+            .v4 => |a| std.net.Address{ .in = a.toNetAddress(port) },
+            .v6 => |a| std.net.Address{ .in6 = a.toNetAddress(port) },
+        };
+    }
+
+    /// Compare two addresses. IPv4 is always less than IPv6
+    pub inline fn order(self: Addr, other: Addr) math.Order {
+        return switch (self) {
+            .v4 => |l4| switch (other) {
+                .v4 => |r4| l4.order(r4),
+                .v6 => math.Order.lt,
+            },
+            .v6 => |l6| switch (other) {
+                .v4 => math.Order.gt,
+                .v6 => |r6| l6.order(r6),
+            },
+        };
+    }
+};
+
 test "Ip6 Address/sizeOf" {
     try testing.expectEqual(@sizeOf(u128), @sizeOf(Ip6Addr));
 }
@@ -496,21 +597,21 @@ test "Ip6 Address/toArrayX" {
 }
 
 test "Ip6 Address/Parse" {
-    const comp_time_one = comptime try Ip6Addr.parse("::1");
+    const comp_time_one = comptime try Addr.parse("::1");
 
     // compile time test
-    try testing.expectEqual(@as(u128, 1), comp_time_one.value());
+    try testing.expectEqual(@as(u128, 1), comp_time_one.v6.value());
 
     // format tests
     try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("::")));
     try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0::0:0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("::0:0:0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0:0::")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0:0:0::0:0:0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0:0:0:0:0:0:0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0:0:0:0:0:0.0.0.0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("::0.0.0.0")));
-    try testing.expectEqual(Ip6Addr.init(0), (try Ip6Addr.parse("0:0::0.0.0.0")));
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("::0:0:0")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("0:0:0::")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("0:0:0:0::0:0:0")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("0:0:0:0:0:0:0:0")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("0:0:0:0:0:0:0.0.0.0")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("::0.0.0.0")).v6);
+    try testing.expectEqual(Ip6Addr.init(0), (try Addr.parse("0:0::0.0.0.0")).v6);
 
     // value tests
     try testing.expectEqual(
@@ -519,27 +620,27 @@ test "Ip6 Address/Parse" {
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x4, 0x0, 0x6, 0x7, 0x8 }),
-        (try Ip6Addr.parse("1:2:3:4::6:7:8")),
+        (try Addr.parse("1:2:3:4::6:7:8")).v6,
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x0, 0x0, 0x6, 0x7, 0x8 }),
-        (try Ip6Addr.parse("1:2:3::6:7:8")),
+        (try Addr.parse("1:2:3::6:7:8")).v6,
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x6, 0x7, 0x8 }),
-        (try Ip6Addr.parse("::6:7:8")),
+        (try Addr.parse("::6:7:8")).v6,
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x2, 0x3, 0x0, 0x0, 0x0, 0x0, 0x0 }),
-        (try Ip6Addr.parse("1:2:3::")),
+        (try Addr.parse("1:2:3::")).v6,
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x8 }),
-        (try Ip6Addr.parse("::8")),
+        (try Addr.parse("::8")).v6,
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u16, [_]u16{ 0x1, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0 }),
-        (try Ip6Addr.parse("1::")),
+        (try Addr.parse("1::")).v6,
     );
 
     // embedded ipv4
@@ -549,7 +650,7 @@ test "Ip6 Address/Parse" {
     );
     try testing.expectEqual(
         Ip6Addr.fromArray(u8, [_]u8{ 0, 0x1, 0, 0x2, 0, 0x3, 0, 0x4, 0, 0x5, 0, 0x6, 0xa, 0xb, 0xc, 0xd }),
-        (try Ip6Addr.parse("1:2:3:4:5:6:10.11.12.13")),
+        (try Addr.parse("1:2:3:4:5:6:10.11.12.13")).v6,
     );
 
     // larger numbers
@@ -563,18 +664,18 @@ test "Ip6 Address/Parse" {
     );
 
     // empty or ambiguous segments
-    try testing.expectError(Ip6Addr.ParseError.EmptySegment, Ip6Addr.parse(":::"));
-    try testing.expectError(Ip6Addr.ParseError.EmptySegment, Ip6Addr.parse(":"));
-    try testing.expectError(Ip6Addr.ParseError.EmptySegment, Ip6Addr.parse("1:2:::4"));
-    try testing.expectError(Ip6Addr.ParseError.EmptySegment, Ip6Addr.parse("1:2::.1.2.3"));
+    try testing.expectError(Addr.ParseError.EmptySegment, Addr.parse(":::"));
+    try testing.expectError(Addr.ParseError.EmptySegment, Addr.parse(":"));
+    try testing.expectError(Addr.ParseError.EmptySegment, Addr.parse("1:2:::4"));
+    try testing.expectError(Addr.ParseError.EmptySegment, Addr.parse("1:2::.1.2.3"));
     try testing.expectError(Ip6Addr.ParseError.EmptySegment, Ip6Addr.parse("1:2::3:"));
 
     // multiple '::'
-    try testing.expectError(Ip6Addr.ParseError.MultipleEllipses, Ip6Addr.parse("1::2:3::4"));
-    try testing.expectError(Ip6Addr.ParseError.MultipleEllipses, Ip6Addr.parse("::1:2::"));
+    try testing.expectError(Addr.ParseError.MultipleEllipses, Addr.parse("1::2:3::4"));
+    try testing.expectError(Addr.ParseError.MultipleEllipses, Addr.parse("::1:2::"));
 
     // overflow
-    try testing.expectError(Ip6Addr.ParseError.Overflow, Ip6Addr.parse("::1cafe"));
+    try testing.expectError(Addr.ParseError.Overflow, Addr.parse("::1cafe"));
 
     // invalid characters
     try testing.expectError(Ip6Addr.ParseError.InvalidCharacter, Ip6Addr.parse("cafe:xafe::1"));
@@ -611,34 +712,44 @@ test "Ip6 Address/get" {
 
 test "Ip6 Address/convert to and from std.net.Address" {
     const value: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
-    const sys_addr = try net.Ip6Address.parse("2001:db8::89ab:cdef", 0);
+    const sys_addr = try net.Ip6Address.parse("2001:db8::89ab:cdef", 10);
+    const sys_addr1 = try net.Address.parseIp6("2001:db8::89ab:cdef", 10);
 
     const addr = Ip6Addr.fromNetAddress(sys_addr);
     try testing.expectEqual(value, addr.value());
-    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress(10).sa.addr);
+    try testing.expectEqual(sys_addr, addr.toNetAddress(10));
+
+    const addr1 = Addr.fromNetAddress(sys_addr1).?;
+    try testing.expectEqual(value, addr1.v6.value());
+    try testing.expectEqual(sys_addr1.in6, addr1.toNetAddress(10).in6);
 }
 
 test "Ip6 Address/convert to Ip4 Address" {
     const value: u128 = 0x00ffffc0a8494f;
     const eq_value: u32 = 0xc0a8494f;
     try testing.expectEqual(eq_value, Ip6Addr.init(value).as(Ip4Addr).?.value());
+    try testing.expectEqual(
+        Addr.init4(Ip4Addr.init(eq_value)),
+        Addr.init6(Ip6Addr.init(value)).as4().?,
+    );
 
     const value1: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
-    try testing.expect(Ip6Addr.init(value1).as(Ip4Addr) == null);
+    try testing.expect(null == Ip6Addr.init(value1).as(Ip4Addr));
+    try testing.expect(null == Addr.init6(Ip6Addr.init(value1)).as4());
 }
 
 test "Ip6 Address/format" {
-    try testing.expectFmt("2001:db8::89ab:cdef", "{}", .{try Ip6Addr.parse("2001:db8::89ab:cdef")});
-    try testing.expectFmt("2001:db8::", "{}", .{try Ip6Addr.parse("2001:db8::")});
+    try testing.expectFmt("2001:db8::89ab:cdef", "{}", .{try Addr.parse("2001:db8::89ab:cdef")});
+    try testing.expectFmt("2001:db8::", "{}", .{try Addr.parse("2001:db8::")});
     try testing.expectFmt("::1", "{}", .{try Ip6Addr.parse("::1")});
     try testing.expectFmt("::", "{}", .{try Ip6Addr.parse("::")});
 
-    try testing.expectFmt("2001:db8::89ab:cdef", "{x}", .{try Ip6Addr.parse("2001:db8::89ab:cdef")});
-    try testing.expectFmt("2001:db8:0:0:0:0:89ab:cdef", "{xE}", .{try Ip6Addr.parse("2001:db8::89ab:cdef")});
+    try testing.expectFmt("2001:db8::89ab:cdef", "{x}", .{try Addr.parse("2001:db8::89ab:cdef")});
+    try testing.expectFmt("2001:db8:0:0:0:0:89ab:cdef", "{xE}", .{try Addr.parse("2001:db8::89ab:cdef")});
     try testing.expectFmt("2001:0db8::89ab:cdef", "{X}", .{try Ip6Addr.parse("2001:db8::89ab:cdef")});
     try testing.expectFmt("2001:0db8:0000:0000:0000:0000:89ab:cdef", "{XE}", .{try Ip6Addr.parse("2001:db8::89ab:cdef")});
 
-    try testing.expectFmt("10000000000001:110110111000::11", "{b}", .{try Ip6Addr.parse("2001:db8::3")});
+    try testing.expectFmt("10000000000001:110110111000::11", "{b}", .{try Addr.parse("2001:db8::3")});
     try testing.expectFmt("10000000000001:110110111000:0:0:0:0:0:11", "{bE}", .{try Ip6Addr.parse("2001:db8::3")});
     try testing.expectFmt("0010000000000001:0000110110111000::0000000000000011", "{B}", .{try Ip6Addr.parse("2001:db8::3")});
 }
@@ -651,6 +762,9 @@ test "Ip6 Address/comparison" {
     try testing.expectEqual(math.Order.eq, addr2.order(addr2));
     try testing.expectEqual(math.Order.lt, addr1.order(addr2));
     try testing.expectEqual(math.Order.gt, addr2.order(addr1));
+
+    try testing.expectEqual(math.Order.gt, Addr.init6(addr2).order(Addr.init6(addr1)));
+    try testing.expectEqual(math.Order.gt, Addr.init6(Ip6Addr.init(0)).order(Addr.init4(Ip4Addr.init(0xffffffff))));
 }
 
 test "Ip4 Address/sizeOf" {
@@ -691,13 +805,13 @@ test "Ip4 Address/toArrayX" {
 }
 
 test "Ip4 Address/Parse" {
-    const comp_time_one = comptime try Ip4Addr.parse("0.0.0.1");
+    const comp_time_one = comptime try Addr.parse("0.0.0.1");
 
-    try testing.expectEqual(@as(u32, 1), comp_time_one.value());
+    try testing.expectEqual(@as(u32, 1), comp_time_one.v4.value());
 
     try testing.expectEqual(
         Ip4Addr.fromArray(u8, [_]u8{ 192, 168, 30, 15 }),
-        (try Ip4Addr.parse("192.168.30.15")),
+        (try Addr.parse("192.168.30.15")).v4,
     );
     try testing.expectEqual(
         Ip4Addr.fromArray(u8, [_]u8{ 0, 0, 0, 0 }),
@@ -713,8 +827,8 @@ test "Ip4 Address/Parse" {
     try testing.expectError(Ip4Addr.ParseError.NotEnoughOctets, Ip4Addr.parse("1.1.1"));
     try testing.expectError(Ip4Addr.ParseError.InvalidCharacter, Ip4Addr.parse("20::1:1"));
     try testing.expectError(Ip4Addr.ParseError.Overflow, Ip4Addr.parse("256.1.1.1"));
-    try testing.expectError(Ip4Addr.ParseError.LeadingZero, Ip4Addr.parse("254.01.1.1"));
-    try testing.expectError(Ip4Addr.ParseError.EmptyOctet, Ip4Addr.parse(".1.1.1"));
+    try testing.expectError(Addr.ParseError.LeadingZero, Addr.parse("254.01.1.1"));
+    try testing.expectError(Addr.ParseError.EmptyOctet, Addr.parse(".1.1.1"));
     try testing.expectError(Ip4Addr.ParseError.EmptyOctet, Ip4Addr.parse("1.1..1"));
     try testing.expectError(Ip4Addr.ParseError.EmptyOctet, Ip4Addr.parse("1.1.1."));
     try testing.expectError(Ip4Addr.ParseError.TooManyOctets, Ip4Addr.parse("1.1.1.1.1"));
@@ -730,25 +844,34 @@ test "Ip4 Address/get" {
 test "Ip4 Address/convert to and from std.net.Ip4Address" {
     // 192 168 73 79 <-> c0 a8 49 4f
     const value: u32 = 0xc0a8494f;
-    const sys_addr = try net.Ip4Address.parse("192.168.73.79", 0);
+    const sys_addr = try net.Ip4Address.parse("192.168.73.79", 5);
+    const sys_addr1 = try net.Address.parseIp4("192.168.73.79", 5);
 
     const addr = Ip4Addr.fromNetAddress(sys_addr);
     try testing.expectEqual(value, addr.value());
-    try testing.expectEqual(sys_addr.sa.addr, addr.toNetAddress(5).sa.addr);
+    try testing.expectEqual(sys_addr, addr.toNetAddress(5));
+
+    const addr1 = Addr.fromNetAddress(sys_addr1).?;
+    try testing.expectEqual(value, addr1.v4.value());
+    try testing.expectEqual(sys_addr1.in, addr1.toNetAddress(5).in);
 }
 
 test "Ip4 Address/convert to Ip6 Address" {
     const value: u32 = 0xc0a8494f;
     const eq_value: u128 = 0x00ffffc0a8494f;
     try testing.expectEqual(eq_value, Ip4Addr.fromArray(u32, [_]u32{value}).as(Ip6Addr).?.value());
+    try testing.expectEqual(
+        Addr.init6(Ip6Addr.init(eq_value)),
+        Addr.init4(Ip4Addr.init(value)).as6(),
+    );
 }
 
 test "Ip4 Address/format" {
-    try testing.expectFmt("192.168.73.72", "{}", .{try Ip4Addr.parse("192.168.73.72")});
+    try testing.expectFmt("192.168.73.72", "{}", .{try Addr.parse("192.168.73.72")});
     try testing.expectFmt("c0.a8.49.1", "{x}", .{try Ip4Addr.parse("192.168.73.1")});
-    try testing.expectFmt("c0.a8.01.01", "{X}", .{try Ip4Addr.parse("192.168.1.1")});
+    try testing.expectFmt("c0.a8.01.01", "{X}", .{try Addr.parse("192.168.1.1")});
     try testing.expectFmt("11000000.10101000.1001001.1001000", "{b}", .{try Ip4Addr.parse("192.168.73.72")});
-    try testing.expectFmt("11000000.10101000.01001001.01001000", "{B}", .{try Ip4Addr.parse("192.168.73.72")});
+    try testing.expectFmt("11000000.10101000.01001001.01001000", "{B}", .{try Addr.parse("192.168.73.72")});
 }
 
 test "Ip4 Address/comparison" {
@@ -759,4 +882,7 @@ test "Ip4 Address/comparison" {
     try testing.expectEqual(math.Order.eq, addr2.order(addr2));
     try testing.expectEqual(math.Order.lt, addr1.order(addr2));
     try testing.expectEqual(math.Order.gt, addr2.order(addr1));
+
+    try testing.expectEqual(math.Order.gt, Addr.init4(addr2).order(Addr.init4(addr1)));
+    try testing.expectEqual(math.Order.lt, Addr.init4(Ip4Addr.init(0xffffffff)).order(Addr.init6(Ip6Addr.init(0))));
 }

@@ -8,6 +8,7 @@ const Signedness = std.builtin.Signedness;
 const addr = @import("./addr.zig");
 const Ip4Addr = addr.Ip4Addr;
 const Ip6Addr = addr.Ip6Addr;
+const Addr = addr.Addr;
 
 /// Inclusion relationship between 2 prefixes A and B
 /// (sets of IP addresses they define)
@@ -60,13 +61,14 @@ pub fn PrefixForAddrType(comptime T: type) type {
         }
 
         inline fn safeInit(a: T, bits: MaskBitsType) Self {
+            assert(bits <= maxMaskBits);
             return Self{ .addr = a, .mask_bits = bits };
         }
 
         /// Create a new prefix with the same bit mask size as
         /// the given example prefix.
-        pub inline fn initAnother(a: T, example: Self) Self {
-            return safeInit(a, example.mask_bits);
+        pub inline fn initAnother(self: Self, a: T) Self {
+            return safeInit(a, self.mask_bits);
         }
 
         /// Parse the prefix from the string representation
@@ -121,7 +123,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
         /// Return the canonical representation of the prefix
         /// with all insignificant bits set to 0 (bits not covered by the mask).
         pub inline fn canonical(self: Self) Self {
-            return Self{ .addr = T.init(self.addr.value() & self.mask()), .mask_bits = self.mask_bits };
+            return self.initAnother(T.init(self.addr.value() & self.mask()));
         }
 
         /// Print the address. The modifier is passed to either Ip4Addr or Ip6Addr unchanged,
@@ -197,19 +199,110 @@ pub const PrefixType = enum {
     v6,
 };
 
-/// A union that allows to work with both prefix types.
+/// A union type that allows to work with both prefix types at the same time.
 /// Only high-level operations are supported. Unwrap the concrete
 /// prefix type to do any sort of low-level or bit operations.
 pub const Prefix = union(PrefixType) {
     v4: Ip4Prefix,
     v6: Ip6Prefix,
 
-    pub fn fromIp4Prefix(p: Ip4Prefix) Prefix {
-        return Prefix{ .v4 = p };
+    pub const ParseError = error{UnknownAddress} || Ip4Prefix.ParseError || Ip6Prefix.ParseError;
+
+    /// Parse the prefix from the string representation
+    pub fn parse(s: []const u8) ParseError!Prefix {
+        for (s) |c| {
+            switch (c) {
+                '.' => return Prefix{ .v4 = try Ip4Prefix.parse(s) },
+                ':' => return Prefix{ .v6 = try Ip6Prefix.parse(s) },
+                else => continue,
+            }
+        }
+
+        return ParseError.UnknownAddress;
     }
 
-    pub fn fromIp6Prefix(p: Ip6Prefix) Prefix {
-        return Prefix{ .v6 = p };
+    /// Return the canonical representation of the prefix
+    /// with all insignificant bits set to 0 (bits not covered by the mask).
+    pub inline fn canonical(self: Prefix) Prefix {
+        return switch (self) {
+            .v4 => |a| Prefix{ .v4 = a.canonical() },
+            .v6 => |a| Prefix{ .v6 = a.canonical() },
+        };
+    }
+
+    /// Return the equivalent IPv6 prefix.
+    pub inline fn as6(self: Prefix) Prefix {
+        return switch (self) {
+            .v4 => |a| Prefix{ .v6 = a.as(Ip6Prefix).? },
+            .v6 => self,
+        };
+    }
+
+    /// Return the equivalent IPv4 prefix if it exists.
+    pub inline fn as4(self: Prefix) ?Prefix {
+        return switch (self) {
+            .v4 => self,
+            .v6 => |a| (if (a.as(Ip4Prefix)) |p| Prefix{ .v4 = p } else null),
+        };
+    }
+
+    /// Test the inclusion relationship between two prefixes.
+    /// Any IPv6 prefix is not related to the IPv4 prefix or vice-versa.
+    pub inline fn testInclusion(self: Prefix, other: Prefix) Inclusion {
+        return switch (self) {
+            .v4 => |l4| switch (other) {
+                .v4 => |r4| l4.testInclusion(r4),
+                .v6 => Inclusion.none,
+            },
+            .v6 => |l6| switch (other) {
+                .v4 => Inclusion.none,
+                .v6 => |r6| l6.testInclusion(r6),
+            },
+        };
+    }
+
+    /// Two prefixes overlap if they are in the inclusion relationship.
+    /// Prefixes from different families do not overlap.
+    pub inline fn overlaps(self: Prefix, other: Prefix) bool {
+        return switch (self) {
+            .v4 => |l4| switch (other) {
+                .v4 => |r4| l4.overlaps(r4),
+                .v6 => false,
+            },
+            .v6 => |l6| switch (other) {
+                .v4 => false,
+                .v6 => |r6| l6.overlaps(r6),
+            },
+        };
+    }
+
+    /// Test if the address is within the range defined by the prefix.
+    /// If prefix and the address are from different families, the result
+    /// is always false.
+    pub inline fn containsAddr(self: Prefix, a: Addr) bool {
+        return switch (self) {
+            .v4 => |l4| switch (a) {
+                .v4 => |r4| l4.containsAddr(r4),
+                .v6 => false,
+            },
+            .v6 => |l6| switch (a) {
+                .v4 => false,
+                .v6 => |r6| l6.containsAddr(r6),
+            },
+        };
+    }
+
+    /// Print the address. The modifier is passed to either Ip4Prefix or Ip6Prefix unchanged.
+    pub fn format(
+        self: Prefix,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        out_stream: anytype,
+    ) !void {
+        switch (self) {
+            .v4 => |a| try a.format(fmt, options, out_stream),
+            .v6 => |a| try a.format(fmt, options, out_stream),
+        }
     }
 };
 
@@ -222,7 +315,7 @@ test "Prefix/trivial init" {
     try testing.expectEqual(Ip6Prefix{ .addr = addr6, .mask_bits = 3 }, try Ip6Prefix.init(addr6, 3));
 
     const prefix = try Ip6Prefix.init(addr6, 32);
-    try testing.expectEqual(Ip6Prefix{ .addr = addr6_1, .mask_bits = 32 }, Ip6Prefix.initAnother(addr6_1, prefix));
+    try testing.expectEqual(Ip6Prefix{ .addr = addr6_1, .mask_bits = 32 }, prefix.initAnother(addr6_1));
 
     try testing.expectError(error.Overflow, Ip4Prefix.init(addr4, 33));
     try testing.expectError(error.Overflow, Ip6Prefix.init(addr6, 129));
@@ -232,58 +325,68 @@ test "Prefix/trivial init" {
 }
 
 test "Prefix/parse4" {
+    const a_str = "192.0.2.1";
+    const a = try Ip4Addr.parse(a_str);
+
     try testing.expectEqual(
-        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 24 },
-        try Ip4Prefix.parse("192.0.2.1/24"),
+        Prefix{ .v4 = Ip4Prefix.safeInit(a, 24) },
+        try Prefix.parse(a_str ++ "/24"),
     );
 
     try testing.expectEqual(
-        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 0 },
-        try Ip4Prefix.parse("192.0.2.1/0"),
+        Prefix{ .v4 = Ip4Prefix.safeInit(a, 0) },
+        try Prefix.parse(a_str ++ "/0"),
     );
 
     try testing.expectEqual(
-        Ip4Prefix{ .addr = Ip4Addr.fromArray(u8, [_]u8{ 192, 0, 2, 1 }), .mask_bits = 32 },
-        try Ip4Prefix.parse("192.0.2.1/32"),
+        Prefix{ .v4 = Ip4Prefix.safeInit(a, 32) },
+        try Prefix.parse(a_str ++ "/32"),
     );
 
-    try testing.expectError(Ip4Prefix.ParseError.NotEnoughOctets, Ip4Prefix.parse("192.0.2/24"));
-    try testing.expectError(Ip4Prefix.ParseError.NoBitMask, Ip4Prefix.parse("192.0.2/"));
-    try testing.expectError(Ip4Prefix.ParseError.NoBitMask, Ip4Prefix.parse("192.0.2"));
-    try testing.expectError(Ip4Prefix.ParseError.Overflow, Ip4Prefix.parse("192.0.2.1/33"));
-    try testing.expectError(Ip4Prefix.ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/test"));
-    try testing.expectError(Ip4Prefix.ParseError.InvalidCharacter, Ip4Prefix.parse("192.0.2.1/-1"));
+    try testing.expectError(Prefix.ParseError.NotEnoughOctets, Prefix.parse("192.0.2/24"));
+    try testing.expectError(Prefix.ParseError.NoBitMask, Prefix.parse("192.0.2/"));
+    try testing.expectError(Prefix.ParseError.NoBitMask, Prefix.parse("192.0.2"));
+    try testing.expectError(Prefix.ParseError.Overflow, Prefix.parse("192.0.2.1/33"));
+    try testing.expectError(Prefix.ParseError.InvalidCharacter, Prefix.parse("192.0.2.1/test"));
+    try testing.expectError(Prefix.ParseError.InvalidCharacter, Prefix.parse("192.0.2.1/-1"));
+    try testing.expectError(Prefix.ParseError.UnknownAddress, Prefix.parse("/"));
 }
 
 test "Prefix/parse6" {
+    const a_str = "2001:db8::1";
+    const a = try Ip6Addr.parse(a_str);
+
     try testing.expectEqual(
-        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 96 },
-        try Ip6Prefix.parse("2001:db8::1/96"),
+        Prefix{ .v6 = Ip6Prefix.safeInit(a, 96) },
+        try Prefix.parse(a_str ++ "/96"),
     );
 
     try testing.expectEqual(
-        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 0 },
-        try Ip6Prefix.parse("2001:db8::1/0"),
+        Prefix{ .v6 = Ip6Prefix.safeInit(a, 0) },
+        try Prefix.parse(a_str ++ "/0"),
     );
 
     try testing.expectEqual(
-        Ip6Prefix{ .addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x1 }), .mask_bits = 128 },
-        try Ip6Prefix.parse("2001:db8::1/128"),
+        Prefix{ .v6 = Ip6Prefix.safeInit(a, 128) },
+        try Prefix.parse(a_str ++ "/128"),
     );
 
-    try testing.expectError(Ip6Prefix.ParseError.NotEnoughSegments, Ip6Prefix.parse("2001:db8:1/24"));
-    try testing.expectError(Ip6Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1/"));
-    try testing.expectError(Ip6Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1"));
-    try testing.expectError(Ip6Prefix.ParseError.Overflow, Ip6Prefix.parse("2001:db8::1/129"));
-    try testing.expectError(Ip6Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/test"));
-    try testing.expectError(Ip6Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/-1"));
+    try testing.expectError(Prefix.ParseError.NotEnoughSegments, Ip6Prefix.parse("2001:db8:1/24"));
+    try testing.expectError(Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1/"));
+    try testing.expectError(Prefix.ParseError.NoBitMask, Ip6Prefix.parse("2001:db8::1"));
+    try testing.expectError(Prefix.ParseError.Overflow, Ip6Prefix.parse("2001:db8::1/129"));
+    try testing.expectError(Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/test"));
+    try testing.expectError(Prefix.ParseError.InvalidCharacter, Ip6Prefix.parse("2001:db8::1/-1"));
+    try testing.expectError(Prefix.ParseError.UnknownAddress, Prefix.parse("/"));
 }
 
 test "Prefix/canonicalize" {
-    try testing.expectEqual(try Ip6Prefix.parse("2001:db8::/48"), (try Ip6Prefix.parse("2001:db8::403:201/48")).canonical());
-    try testing.expectEqual(try Ip6Prefix.parse("2001:0db8:8000::/33"), (try Ip6Prefix.parse("2001:db8:85a3::8a2e:370:7334/33")).canonical());
-    try testing.expectEqual(try Ip4Prefix.parse("192.0.2.0/24"), (try Ip4Prefix.parse("192.0.2.48/24")).canonical());
-    try testing.expectEqual(try Ip4Prefix.parse("37.224.0.0/11"), (try Ip4Prefix.parse("37.228.215.135/11")).canonical());
+    try testing.expectEqual(try Prefix.parse("2001:db8::/48"), (try Prefix.parse("2001:db8::403:201/48")).canonical());
+    try testing.expectEqual(try Prefix.parse("2001:db8::/48"), (try Prefix.parse("2001:db8::403:201/48")).canonical());
+    try testing.expectEqual(try Prefix.parse("2001:0db8:8000::/33"), (try Prefix.parse("2001:db8:85a3::8a2e:370:7334/33")).canonical());
+    try testing.expectEqual(try Prefix.parse("192.0.2.0/24"), (try Prefix.parse("192.0.2.48/24")).canonical());
+    try testing.expectEqual(try Prefix.parse("192.0.2.0/24"), (try Prefix.parse("192.0.2.48/24")).canonical());
+    try testing.expectEqual(try Prefix.parse("37.224.0.0/11"), (try Prefix.parse("37.228.215.135/11")).canonical());
 }
 
 test "Prefix/addrRange" {
@@ -305,88 +408,90 @@ test "Prefix/addrRange" {
 }
 
 test "Prefix/format" {
-    const prefix4 = "192.0.2.16/24";
-    const prefix6 = "2001:0db8:85a3::1/96";
+    const prefix4 = try Prefix.parse("192.0.2.16/24");
+    const prefix6 = try Prefix.parse("2001:0db8:85a3::1/96");
 
-    try testing.expectFmt("192.0.2.16/24", "{}", .{try Ip4Prefix.parse(prefix4)});
-    try testing.expectFmt("c0.0.2.10/24", "{x}", .{try Ip4Prefix.parse(prefix4)});
-    try testing.expectFmt("192.0.2.0-192.0.2.255", "{R}", .{try Ip4Prefix.parse(prefix4)});
-    try testing.expectFmt("c0.00.02.00-c0.00.02.ff", "{RX}", .{try Ip4Prefix.parse(prefix4)});
+    try testing.expectFmt("192.0.2.16/24", "{}", .{prefix4});
+    try testing.expectFmt("c0.0.2.10/24", "{x}", .{prefix4});
+    try testing.expectFmt("c0.00.02.10/24", "{X}", .{prefix4});
+    try testing.expectFmt("192.0.2.0-192.0.2.255", "{R}", .{prefix4});
+    try testing.expectFmt("c0.00.02.00-c0.00.02.ff", "{RX}", .{prefix4});
 
-    try testing.expectFmt("2001:db8:85a3::1/96", "{}", .{try Ip6Prefix.parse(prefix6)});
-    try testing.expectFmt("2001:0db8:85a3::0001/96", "{X}", .{try Ip6Prefix.parse(prefix6)});
-    try testing.expectFmt("2001:db8:85a3::-2001:db8:85a3::ffff:ffff", "{R}", .{try Ip6Prefix.parse(prefix6)});
-    try testing.expectFmt("2001:db8:85a3:0:0:0:0:0-2001:db8:85a3:0:0:0:ffff:ffff", "{RE}", .{try Ip6Prefix.parse(prefix6)});
+    try testing.expectFmt("2001:db8:85a3::1/96", "{}", .{prefix6});
+    try testing.expectFmt("2001:0db8:85a3::0001/96", "{X}", .{prefix6});
+    try testing.expectFmt("2001:db8:85a3::1/96", "{x}", .{prefix6});
+    try testing.expectFmt("2001:db8:85a3::-2001:db8:85a3::ffff:ffff", "{R}", .{prefix6});
+    try testing.expectFmt("2001:db8:85a3:0:0:0:0:0-2001:db8:85a3:0:0:0:ffff:ffff", "{RE}", .{prefix6});
 }
 
 test "Prefix/contansAddress" {
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/0")).containsAddr(try Ip4Addr.parse("192.168.1.1")));
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/8")).containsAddr(try Ip4Addr.parse("10.6.3.5")));
-    try testing.expect((try Ip4Prefix.parse("10.11.12.13/32")).containsAddr(try Ip4Addr.parse("10.11.12.13")));
-    try testing.expect(!(try Ip4Prefix.parse("192.0.2.0/25")).containsAddr(try Ip4Addr.parse("192.0.2.192")));
+    try testing.expect((try Prefix.parse("10.11.12.13/0")).containsAddr(try Addr.parse("192.168.1.1")));
+    try testing.expect((try Prefix.parse("10.11.12.13/8")).containsAddr(try Addr.parse("10.6.3.5")));
+    try testing.expect((try Prefix.parse("10.11.12.13/32")).containsAddr(try Addr.parse("10.11.12.13")));
+    try testing.expect(!(try Prefix.parse("192.0.2.0/25")).containsAddr(try Addr.parse("192.0.2.192")));
+    try testing.expect(!(try Prefix.parse("0.0.0.0/0")).containsAddr(try Addr.parse("::1")));
 
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/0")).containsAddr(try Ip6Addr.parse("3001:db8::1")));
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/8")).containsAddr(try Ip6Addr.parse("2002:db8::1")));
-    try testing.expect((try Ip6Prefix.parse("2001:db8::/16")).containsAddr(try Ip6Addr.parse("2001:db8::2")));
-    try testing.expect(!(try Ip6Prefix.parse("2001:db8::cafe:0/112")).containsAddr(try Ip6Addr.parse("2001:db8::beef:7")));
+    try testing.expect((try Prefix.parse("2001:db8::/0")).containsAddr(try Addr.parse("3001:db8::1")));
+    try testing.expect((try Prefix.parse("2001:db8::/8")).containsAddr(try Addr.parse("2002:db8::1")));
+    try testing.expect((try Prefix.parse("2001:db8::/16")).containsAddr(try Addr.parse("2001:db8::2")));
+    try testing.expect(!(try Prefix.parse("2001:db8::cafe:0/112")).containsAddr(try Addr.parse("2001:db8::beef:7")));
+    try testing.expect(!(try Prefix.parse("::/0")).containsAddr(try Addr.parse("1.1.1.1")));
 }
 
 test "Prefix/inclusion" {
-    const prefixes4 = [_]Ip4Prefix{
-        try Ip4Prefix.parse("10.11.12.13/0"),
-        try Ip4Prefix.parse("10.11.12.13/3"),
-        try Ip4Prefix.parse("10.11.12.13/24"),
-        try Ip4Prefix.parse("10.11.12.13/31"),
-        try Ip4Prefix.parse("10.11.12.13/32"),
+    const prefixes4 = [_]Prefix{
+        try Prefix.parse("10.11.12.13/0"),
+        try Prefix.parse("10.11.12.13/3"),
+        try Prefix.parse("10.11.12.13/24"),
+        try Prefix.parse("10.11.12.13/31"),
+        try Prefix.parse("10.11.12.13/32"),
     };
 
-    for (prefixes4) |p, i| {
-        try testing.expectEqual(Inclusion.eq, p.testInclusion(p));
-        try testing.expect(p.overlaps(p));
-        for (prefixes4[0..i]) |prev| {
-            try testing.expectEqual(Inclusion.sub, p.testInclusion(prev));
-            try testing.expect(p.overlaps(prev));
-        }
-        if (i == prefixes4.len - 1) continue;
-        for (prefixes4[i + 1 ..]) |next| {
-            try testing.expectEqual(Inclusion.super, p.testInclusion(next));
-            try testing.expect(p.overlaps(next));
+    const prefixes6 = [_]Prefix{
+        try Prefix.parse("2001:db8:cafe::1/0"),
+        try Prefix.parse("2001:db8:cafe::1/3"),
+        try Prefix.parse("2001:db8:cafe::1/32"),
+        try Prefix.parse("2001:db8:cafe::1/127"),
+        try Prefix.parse("2001:db8:cafe::1/128"),
+    };
+
+    const prefixes = [_][5]Prefix{ prefixes4, prefixes6 };
+    for (prefixes) |prefix| {
+        for (prefix) |p, i| {
+            try testing.expectEqual(Inclusion.eq, p.testInclusion(p));
+            try testing.expect(p.overlaps(p));
+            for (prefix[0..i]) |prev| {
+                try testing.expectEqual(Inclusion.sub, p.testInclusion(prev));
+                try testing.expect(p.overlaps(prev));
+            }
+            if (i == prefix.len - 1) continue;
+            for (prefix[i + 1 ..]) |next| {
+                try testing.expectEqual(Inclusion.super, p.testInclusion(next));
+                try testing.expect(p.overlaps(next));
+            }
         }
     }
 
-    try testing.expectEqual(Inclusion.none, (try Ip4Prefix.parse("192.168.73.0/24")).testInclusion(try Ip4Prefix.parse("192.168.74.0/24")));
-    try testing.expect(!(try Ip4Prefix.parse("192.168.73.0/24")).overlaps(try Ip4Prefix.parse("192.168.74.0/24")));
+    const unrel4_1 = try Prefix.parse("192.168.73.0/24");
+    const unrel4_2 = try Prefix.parse("192.168.74.0/24");
+    const unrel6_1 = try Prefix.parse("2001:db8:cafe::1/48");
+    const unrel6_2 = try Prefix.parse("2001:db8:beef::1/48");
+    const all_addr4 = try Prefix.parse("0.0.0.0/0");
+    const all_addr6 = try Prefix.parse("::/0");
 
-    const prefixes6 = [_]Ip6Prefix{
-        try Ip6Prefix.parse("2001:db8:cafe::1/0"),
-        try Ip6Prefix.parse("2001:db8:cafe::1/3"),
-        try Ip6Prefix.parse("2001:db8:cafe::1/32"),
-        try Ip6Prefix.parse("2001:db8:cafe::1/127"),
-        try Ip6Prefix.parse("2001:db8:cafe::1/128"),
-    };
+    try testing.expectEqual(Inclusion.none, unrel4_1.testInclusion(unrel4_2));
+    try testing.expectEqual(Inclusion.none, unrel6_1.testInclusion(unrel6_2));
+    try testing.expectEqual(Inclusion.none, all_addr4.testInclusion(all_addr6));
 
-    for (prefixes6) |p, i| {
-        try testing.expectEqual(Inclusion.eq, p.testInclusion(p));
-        try testing.expect(p.overlaps(p));
-        for (prefixes6[0..i]) |prev| {
-            try testing.expectEqual(Inclusion.sub, p.testInclusion(prev));
-            try testing.expect(p.overlaps(prev));
-        }
-        if (i == prefixes6.len - 1) continue;
-        for (prefixes6[i + 1 ..]) |next| {
-            try testing.expectEqual(Inclusion.super, p.testInclusion(next));
-            try testing.expect(p.overlaps(next));
-        }
-    }
-
-    try testing.expectEqual(Inclusion.none, (try Ip6Prefix.parse("2001:db8:cafe::1/48")).testInclusion(try Ip6Prefix.parse("2001:db8:beef::1/48")));
-    try testing.expect(!(try Ip6Prefix.parse("2001:db8:cafe::1/48")).overlaps(try Ip6Prefix.parse("2001:db8:beef::1/48")));
+    try testing.expect(!unrel4_2.overlaps(unrel4_1));
+    try testing.expect(!unrel6_2.overlaps(unrel6_1));
+    try testing.expect(!all_addr6.overlaps(all_addr4));
 }
 
 test "Prefix/conversion" {
-    try testing.expectEqual(try Ip6Prefix.parse("::ffff:0a0b:0c0d/112"), (try Ip4Prefix.parse("10.11.12.13/16")).as(Ip6Prefix).?);
-    try testing.expectEqual(try Ip6Prefix.parse("::ffff:0a0b:0c0d/128"), (try Ip4Prefix.parse("10.11.12.13/32")).as(Ip6Prefix).?);
-    try testing.expectEqual(try Ip4Prefix.parse("10.11.12.13/16"), (try Ip6Prefix.parse("::ffff:0a0b:0c0d/112")).as(Ip4Prefix).?);
-    try testing.expectEqual(try Ip4Prefix.parse("10.11.12.13/32"), (try Ip6Prefix.parse("::ffff:0a0b:0c0d/128")).as(Ip4Prefix).?);
-    try testing.expect(null == (try Ip6Prefix.parse("2001::ffff:0a0b:0c0d/48")).as(Ip4Prefix));
+    try testing.expectEqual(try Prefix.parse("::ffff:0a0b:0c0d/112"), (try Prefix.parse("10.11.12.13/16")).as6());
+    try testing.expectEqual(try Prefix.parse("::ffff:0a0b:0c0d/128"), (try Prefix.parse("10.11.12.13/32")).as6());
+    try testing.expectEqual(try Prefix.parse("10.11.12.13/16"), (try Prefix.parse("::ffff:0a0b:0c0d/112")).as4().?);
+    try testing.expectEqual(try Prefix.parse("10.11.12.13/32"), (try Prefix.parse("::ffff:0a0b:0c0d/128")).as4().?);
+    try testing.expect(null == (try Prefix.parse("2001::ffff:0a0b:0c0d/48")).as4());
 }
