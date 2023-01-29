@@ -449,6 +449,7 @@ pub const Ip6Addr = AddrForValue(ip6);
 
 pub const Ip6AddrScoped = struct {
     pub const ParseError = error{EmptyZone} || Ip6Addr.ParseError;
+    pub const NetAddrScopeError = std.fmt.BufPrintError;
 
     addr: Ip6Addr,
     zone: []const u8, // not owned, zone.len == 0 for zoneless ips
@@ -472,14 +473,14 @@ pub const Ip6AddrScoped = struct {
         };
     }
 
-    /// Get underlying IPv6 address
-    pub fn getAddr(self: Ip6AddrScoped) Ip6Addr {
-        return self.addr;
-    }
-
-    /// Get underlying zone identifier
-    pub fn getZone(self: Ip6AddrScoped) []const u8 {
-        return self.zone;
+    /// Create an address from the std.net.Ip6Address type.
+    /// The conversion is lossy and the port information
+    /// is discarded.
+    /// Numeric scope_id is converted into the string (1 -> "1").
+    pub fn fromNetAddress(a: net.Ip6Address, buf: []u8) NetAddrScopeError!Ip6AddrScoped {
+        const addr = Ip6Addr.fromNetAddress(a);
+        const zone = try std.fmt.bufPrint(buf, "{}", .{a.sa.scope_id});
+        return init(addr, zone);
     }
 
     /// Returns true if the zone is present.
@@ -764,8 +765,8 @@ test "Ip6 Address Scoped/Parse" {
         const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef%eth3");
 
         try testing.expect(actual.hasZone());
-        try testing.expectEqual(expected_addr, actual.getAddr());
-        try testing.expectEqualStrings(expected_zone, actual.getZone());
+        try testing.expectEqual(expected_addr, actual.addr);
+        try testing.expectEqualStrings(expected_zone, actual.zone);
     }
 
     {
@@ -775,8 +776,8 @@ test "Ip6 Address Scoped/Parse" {
         const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef%eth%3");
 
         try testing.expect(actual.hasZone());
-        try testing.expectEqual(expected_addr, actual.getAddr());
-        try testing.expectEqualStrings(expected_zone, actual.getZone());
+        try testing.expectEqual(expected_addr, actual.addr);
+        try testing.expectEqualStrings(expected_zone, actual.zone);
     }
 
     {
@@ -785,8 +786,8 @@ test "Ip6 Address Scoped/Parse" {
         const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef");
 
         try testing.expect(!actual.hasZone());
-        try testing.expectEqual(expected_addr, actual.getAddr());
-        try testing.expectEqualStrings(expected_zone, actual.getZone());
+        try testing.expectEqual(expected_addr, actual.addr);
+        try testing.expectEqualStrings(expected_zone, actual.zone);
     }
 
     // raw IPv6 parsing errors
@@ -815,6 +816,23 @@ test "Ip6 Address/convert to and from std.net.Address" {
     const addr1 = Addr.fromNetAddress(sys_addr1).?;
     try testing.expectEqual(value, addr1.v6.value());
     try testing.expectEqual(sys_addr1.in6, addr1.toNetAddress(10).in6);
+}
+
+test "Ip6 Address Scoped/convert to and from std.net.Address" {
+    const value: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
+    const sys_addr = try net.Ip6Address.parse("2001:db8::89ab:cdef%101", 10);
+
+    {
+        var buf = [_]u8{0} ** 10;
+        const scoped = try Ip6AddrScoped.fromNetAddress(sys_addr, buf[0..]);
+        try testing.expectEqual(value, scoped.addr.value());
+        try testing.expectEqualStrings("101", scoped.zone);
+    }
+
+    {
+        var buf = [_]u8{0};
+        try testing.expectError(Ip6AddrScoped.NetAddrScopeError.NoSpaceLeft, Ip6AddrScoped.fromNetAddress(sys_addr, buf[0..]));
+    }
 }
 
 test "Ip6 Address/convert to Ip4 Address" {
