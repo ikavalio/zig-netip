@@ -447,6 +447,60 @@ pub fn AddrForValue(comptime M: type) type {
 pub const Ip4Addr = AddrForValue(ip4);
 pub const Ip6Addr = AddrForValue(ip6);
 
+pub const Ip6AddrScoped = struct {
+    pub const ParseError = error{EmptyZone} || Ip6Addr.ParseError;
+
+    addr: Ip6Addr,
+    zone: []const u8, // not owned, zone.len == 0 for zoneless ips
+
+    /// Tie the address to the scope
+    pub fn init(addr: Ip6Addr, zn: []const u8) Ip6AddrScoped {
+        return Ip6AddrScoped{ .addr = addr, .zone = zn };
+    }
+
+    /// Parse the address from the string representation.
+    /// The method supports only the standard representation of the
+    /// IPv6 address with or without the zone identifier.
+    /// The returned scope (if exists) is a slice of the input (not owned).
+    pub fn parse(input: []const u8) ParseError!Ip6AddrScoped {
+        const b = if (mem.indexOfScalar(u8, input, '%')) |i| i else input.len;
+        const addr = try Ip6Addr.parse(input[0..b]);
+        return switch (input.len - b) {
+            0 => init(addr, input[b..]),
+            1 => ParseError.EmptyZone,
+            else => init(addr, input[b + 1 ..]),
+        };
+    }
+
+    /// Get underlying IPv6 address
+    pub fn getAddr(self: Ip6AddrScoped) Ip6Addr {
+        return self.addr;
+    }
+
+    /// Get underlying zone identifier
+    pub fn getZone(self: Ip6AddrScoped) []const u8 {
+        return self.zone;
+    }
+
+    /// Returns true if the zone is present.
+    pub fn hasZone(self: Ip6AddrScoped) bool {
+        return self.zone.len > 0;
+    }
+
+    /// Print the address.
+    pub fn format(
+        self: Ip6AddrScoped,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        out_stream: anytype,
+    ) !void {
+        try self.addr.format(fmt, options, out_stream);
+        if (self.hasZone()) {
+            try std.fmt.format(out_stream, "%{s}", .{self.zone});
+        }
+    }
+};
+
 pub const AddrType = enum {
     v4,
     v6,
@@ -703,6 +757,45 @@ test "Ip6 Address/Parse" {
     try testing.expectError(Ip6Addr.ParseError.AmbiguousEllipsis, Ip6Addr.parse("1:2:3:4::5:6:7:8"));
 }
 
+test "Ip6 Address Scoped/Parse" {
+    {
+        const expected_addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef });
+        const expected_zone = "eth3";
+        const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef%eth3");
+
+        try testing.expect(actual.hasZone());
+        try testing.expectEqual(expected_addr, actual.getAddr());
+        try testing.expectEqualStrings(expected_zone, actual.getZone());
+    }
+
+    {
+        // the zone can be implementation specific
+        const expected_addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef });
+        const expected_zone = "eth%3";
+        const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef%eth%3");
+
+        try testing.expect(actual.hasZone());
+        try testing.expectEqual(expected_addr, actual.getAddr());
+        try testing.expectEqualStrings(expected_zone, actual.getZone());
+    }
+
+    {
+        const expected_addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef });
+        const expected_zone = "";
+        const actual = try Ip6AddrScoped.parse("2001:db8::89ab:cdef");
+
+        try testing.expect(!actual.hasZone());
+        try testing.expectEqual(expected_addr, actual.getAddr());
+        try testing.expectEqualStrings(expected_zone, actual.getZone());
+    }
+
+    // raw IPv6 parsing errors
+    try testing.expectError(Ip6AddrScoped.ParseError.AmbiguousEllipsis, Ip6AddrScoped.parse("1:2:3:4::5:6:7:8"));
+
+    // empty zone
+    try testing.expectError(Ip6AddrScoped.ParseError.EmptyZone, Ip6AddrScoped.parse("::1%"));
+}
+
 test "Ip6 Address/get" {
     const addr = Ip6Addr.fromArray(u16, [_]u16{ 0x2001, 0x0db8, 0, 0, 0, 0, 0x89ab, 0xcdef });
 
@@ -752,6 +845,12 @@ test "Ip6 Address/format" {
     try testing.expectFmt("10000000000001:110110111000::11", "{b}", .{try Addr.parse("2001:db8::3")});
     try testing.expectFmt("10000000000001:110110111000:0:0:0:0:0:11", "{bE}", .{try Ip6Addr.parse("2001:db8::3")});
     try testing.expectFmt("0010000000000001:0000110110111000::0000000000000011", "{B}", .{try Ip6Addr.parse("2001:db8::3")});
+}
+
+test "Ip6 Address Scoped/format" {
+    try testing.expectFmt("2001:db8::89ab:cdef", "{x}", .{try Ip6AddrScoped.parse("2001:db8::89ab:cdef")});
+    try testing.expectFmt("2001:db8:0:0:0:0:89ab:cdef%eth0", "{xE}", .{try Ip6AddrScoped.parse("2001:db8::89ab:cdef%eth0")});
+    try testing.expectFmt("2001:0db8::89ab:cdef%1", "{X}", .{try Ip6AddrScoped.parse("2001:db8::89ab:cdef%1")});
 }
 
 test "Ip6 Address/comparison" {
