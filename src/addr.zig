@@ -483,6 +483,24 @@ pub const Ip6AddrScoped = struct {
         return init(addr, zone);
     }
 
+    /// Convert the address to the std.net.Ip6Address type.
+    /// Since the value doesn't carry port information,
+    /// it must be provided as an argument.
+    pub fn toNetAddress(self: Ip6AddrScoped, port: u16) !net.Ip6Address {
+        var stdlib_addr = self.addr.toNetAddress(port);
+        stdlib_addr.sa.scope_id = std.fmt.parseInt(u32, self.zone, 10) catch |err| blk: {
+            if (err != error.InvalidCharacter) return err;
+            break :blk try if_nametoindex(self.zone);
+        };
+        return stdlib_addr;
+    }
+
+    // TODO: implement
+    fn if_nametoindex(name: []const u8) !u32 {
+        _ = name;
+        return error.NotImplemented;
+    }
+
     /// Returns true if the zone is present.
     pub fn hasZone(self: Ip6AddrScoped) bool {
         return self.zone.len > 0;
@@ -499,6 +517,14 @@ pub const Ip6AddrScoped = struct {
         if (self.hasZone()) {
             try std.fmt.format(out_stream, "%{s}", .{self.zone});
         }
+    }
+
+    /// Compare two addresses.
+    pub fn order(self: Ip6AddrScoped, other: Ip6AddrScoped) math.Order {
+        const addr_order = self.addr.order(other.addr);
+        if (addr_order != math.Order.eq) return addr_order;
+
+        return mem.order(u8, self.zone, other.zone);
     }
 };
 
@@ -827,6 +853,7 @@ test "Ip6 Address Scoped/convert to and from std.net.Address" {
         const scoped = try Ip6AddrScoped.fromNetAddress(sys_addr, buf[0..]);
         try testing.expectEqual(value, scoped.addr.value());
         try testing.expectEqualStrings("101", scoped.zone);
+        try testing.expectEqual(sys_addr, try scoped.toNetAddress(10));
     }
 
     {
@@ -882,6 +909,18 @@ test "Ip6 Address/comparison" {
 
     try testing.expectEqual(math.Order.gt, Addr.init6(addr2).order(Addr.init6(addr1)));
     try testing.expectEqual(math.Order.gt, Addr.init6(Ip6Addr.init(0)).order(Addr.init4(Ip4Addr.init(0xffffffff))));
+}
+
+test "Ip6 Address Scoped/comparison" {
+    const addr1 = Ip6Addr.init(1);
+    const scoped1_1 = Ip6AddrScoped.init(addr1, "1");
+    const scoped1_2 = Ip6AddrScoped.init(addr1, "2");
+    const addr2 = Ip6Addr.init(2);
+    const scoped2 = Ip6AddrScoped.init(addr2, "1");
+
+    try testing.expectEqual(math.Order.eq, scoped1_1.order(scoped1_1));
+    try testing.expectEqual(math.Order.lt, scoped1_1.order(scoped1_2));
+    try testing.expectEqual(math.Order.gt, scoped2.order(scoped1_2));
 }
 
 test "Ip4 Address/sizeOf" {

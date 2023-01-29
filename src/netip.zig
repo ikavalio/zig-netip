@@ -2,12 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const math = std.math;
 
-// TODO:
-// - Ip6AddrScoped
-// - Prefix Set/Map
-// - Well known addresses and prefixes
-// - Data structures
-
 pub fn order(a: anytype, b: @TypeOf(a)) math.Order {
     return a.order(b);
 }
