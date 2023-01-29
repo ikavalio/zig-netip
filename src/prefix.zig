@@ -284,10 +284,12 @@ pub const Prefix = union(PrefixType) {
             .v4 => |l4| switch (a) {
                 .v4 => |r4| l4.containsAddr(r4),
                 .v6 => false,
+                .v6s => false,
             },
             .v6 => |l6| switch (a) {
                 .v4 => false,
                 .v6 => |r6| l6.containsAddr(r6),
+                .v6s => false,
             },
         };
     }

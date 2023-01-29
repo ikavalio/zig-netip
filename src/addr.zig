@@ -450,6 +450,7 @@ pub const Ip6Addr = AddrForValue(ip6);
 pub const Ip6AddrScoped = struct {
     pub const ParseError = error{EmptyZone} || Ip6Addr.ParseError;
     pub const NetAddrScopeError = std.fmt.BufPrintError;
+    pub const NoZone: []const u8 = "";
 
     addr: Ip6Addr,
     zone: []const u8, // not owned, zone.len == 0 for zoneless ips
@@ -531,6 +532,7 @@ pub const Ip6AddrScoped = struct {
 pub const AddrType = enum {
     v4,
     v6,
+    v6s,
 };
 
 /// A union type that allows to work with both address types at the same time.
@@ -539,8 +541,10 @@ pub const AddrType = enum {
 pub const Addr = union(AddrType) {
     v4: Ip4Addr,
     v6: Ip6Addr,
+    v6s: Ip6AddrScoped,
 
-    pub const ParseError = error{UnknownAddress} || Ip4Addr.ParseError || Ip6Addr.ParseError;
+    pub const ParseError = error{UnknownAddress} || Ip4Addr.ParseError || Ip6Addr.ParseError || Ip6AddrScoped.ParseError;
+    pub const FromNetAddressError = error{UnsupportedAddressFamily} || Ip6AddrScoped.NetAddrScopeError;
 
     pub fn init4(a: Ip4Addr) Addr {
         return Addr{ .v4 = a };
@@ -550,12 +554,19 @@ pub const Addr = union(AddrType) {
         return Addr{ .v6 = a };
     }
 
+    pub fn init6Scoped(a: Ip6AddrScoped) Addr {
+        return Addr{ .v6s = a };
+    }
+
     /// Parse the address from the string representation
     pub fn parse(s: []const u8) ParseError!Addr {
         for (s) |c| {
             switch (c) {
                 '.' => return Addr{ .v4 = try Ip4Addr.parse(s) },
-                ':' => return Addr{ .v6 = try Ip6Addr.parse(s) },
+                ':' => {
+                    const addr_v6 = try Ip6AddrScoped.parse(s);
+                    return if (addr_v6.hasZone()) init6Scoped(addr_v6) else init6(addr_v6.addr);
+                },
                 else => continue,
             }
         }
@@ -566,11 +577,15 @@ pub const Addr = union(AddrType) {
     /// Create an Addr from the std.net.Address.
     /// The conversion is lossy and some information
     /// is discarded.
-    pub fn fromNetAddress(a: std.net.Address) ?Addr {
+    /// Buf is only required for scoped IPv6 addresses.
+    pub fn fromNetAddress(a: std.net.Address, buf: []u8) FromNetAddressError!Addr {
         return switch (a.any.family) {
             os.AF.INET => Addr{ .v4 = Ip4Addr.fromNetAddress(a.in) },
-            os.AF.INET6 => Addr{ .v6 = Ip6Addr.fromNetAddress(a.in6) },
-            else => null,
+            os.AF.INET6 => switch (a.in6.sa.scope_id) {
+                0 => Addr{ .v6 = Ip6Addr.fromNetAddress(a.in6) },
+                else => Addr{ .v6s = try Ip6AddrScoped.fromNetAddress(a.in6, buf) },
+            },
+            else => FromNetAddressError.UnsupportedAddressFamily,
         };
     }
 
@@ -579,6 +594,16 @@ pub const Addr = union(AddrType) {
         return switch (self) {
             .v4 => |a| Addr{ .v6 = a.as(Ip6Addr).? },
             .v6 => self,
+            .v6s => |a| Addr{ .v6 = a.addr },
+        };
+    }
+
+    /// Return the equivalent scoped IPv6 address.
+    pub fn as6Scoped(self: Addr, zn: []const u8) Addr {
+        return switch (self) {
+            .v4 => |a| Addr{ .v6s = Ip6AddrScoped.init(a.as(Ip6Addr).?, zn) },
+            .v6 => |a| Addr{ .v6s = Ip6AddrScoped.init(a, zn) },
+            .v6s => |a| Addr{ .v6s = Ip6AddrScoped.init(a.addr, zn) },
         };
     }
 
@@ -587,6 +612,7 @@ pub const Addr = union(AddrType) {
         return switch (self) {
             .v4 => self,
             .v6 => |a| (if (a.as(Ip4Addr)) |p| Addr{ .v4 = p } else null),
+            .v6s => |a| (if (a.addr.as(Ip4Addr)) |p| Addr{ .v4 = p } else null),
         };
     }
 
@@ -600,16 +626,18 @@ pub const Addr = union(AddrType) {
         switch (self) {
             .v4 => |a| try a.format(fmt, options, out_stream),
             .v6 => |a| try a.format(fmt, options, out_stream),
+            .v6s => |a| try a.format(fmt, options, out_stream),
         }
     }
 
     /// Convert the address to the equivalent std.net.Address.
     /// Since the value doesn't carry port information,
     /// it must be provided as an argument.
-    pub fn toNetAddress(self: Addr, port: u16) std.net.Address {
+    pub fn toNetAddress(self: Addr, port: u16) !std.net.Address {
         return switch (self) {
             .v4 => |a| std.net.Address{ .in = a.toNetAddress(port) },
             .v6 => |a| std.net.Address{ .in6 = a.toNetAddress(port) },
+            .v6s => |a| std.net.Address{ .in6 = try a.toNetAddress(port) },
         };
     }
 
@@ -619,10 +647,17 @@ pub const Addr = union(AddrType) {
             .v4 => |l4| switch (other) {
                 .v4 => |r4| l4.order(r4),
                 .v6 => math.Order.lt,
+                .v6s => math.Order.lt,
             },
             .v6 => |l6| switch (other) {
                 .v4 => math.Order.gt,
                 .v6 => |r6| l6.order(r6),
+                .v6s => |r6s| Ip6AddrScoped.init(l6, Ip6AddrScoped.NoZone).order(r6s),
+            },
+            .v6s => |l6s| switch (other) {
+                .v4 => math.Order.gt,
+                .v6 => |r6| l6s.order(Ip6AddrScoped.init(r6, Ip6AddrScoped.NoZone)),
+                .v6s => |r6s| l6s.order(r6s),
             },
         };
     }
@@ -839,9 +874,10 @@ test "Ip6 Address/convert to and from std.net.Address" {
     try testing.expectEqual(value, addr.value());
     try testing.expectEqual(sys_addr, addr.toNetAddress(10));
 
-    const addr1 = Addr.fromNetAddress(sys_addr1).?;
+    var buf: [10]u8 = undefined;
+    const addr1 = try Addr.fromNetAddress(sys_addr1, buf[0..]);
     try testing.expectEqual(value, addr1.v6.value());
-    try testing.expectEqual(sys_addr1.in6, addr1.toNetAddress(10).in6);
+    try testing.expectEqual(sys_addr1.in6, (try addr1.toNetAddress(10)).in6);
 }
 
 test "Ip6 Address Scoped/convert to and from std.net.Address" {
@@ -865,15 +901,22 @@ test "Ip6 Address Scoped/convert to and from std.net.Address" {
 test "Ip6 Address/convert to Ip4 Address" {
     const value: u128 = 0x00ffffc0a8494f;
     const eq_value: u32 = 0xc0a8494f;
-    try testing.expectEqual(eq_value, Ip6Addr.init(value).as(Ip4Addr).?.value());
     try testing.expectEqual(
         Addr.init4(Ip4Addr.init(eq_value)),
         Addr.init6(Ip6Addr.init(value)).as4().?,
     );
+    try testing.expectEqual(
+        Addr.init4(Ip4Addr.init(eq_value)),
+        Addr.init6Scoped(Ip6AddrScoped.init(Ip6Addr.init(value), "test")).as4().?,
+    );
 
     const value1: u128 = 0x2001_0db8_0000_0000_0000_0000_89ab_cdef;
-    try testing.expect(null == Ip6Addr.init(value1).as(Ip4Addr));
-    try testing.expect(null == Addr.init6(Ip6Addr.init(value1)).as4());
+    const addr1 = Ip6Addr.init(value1);
+    try testing.expect(null == addr1.as(Ip4Addr));
+    try testing.expect(null == Addr.init6(addr1).as4());
+    try testing.expect(null == Addr.init6Scoped(Ip6AddrScoped.init(addr1, "test")).as4());
+
+    try testing.expectEqualStrings("test", Addr.init6(addr1).as6Scoped("test").v6s.zone);
 }
 
 test "Ip6 Address/format" {
@@ -917,10 +960,15 @@ test "Ip6 Address Scoped/comparison" {
     const scoped1_2 = Ip6AddrScoped.init(addr1, "2");
     const addr2 = Ip6Addr.init(2);
     const scoped2 = Ip6AddrScoped.init(addr2, "1");
+    const addr3 = Ip6Addr.init(3);
+    const scoped3 = Ip6AddrScoped.init(addr3, "0");
 
     try testing.expectEqual(math.Order.eq, scoped1_1.order(scoped1_1));
     try testing.expectEqual(math.Order.lt, scoped1_1.order(scoped1_2));
     try testing.expectEqual(math.Order.gt, scoped2.order(scoped1_2));
+
+    try testing.expectEqual(math.Order.gt, Addr.init6Scoped(scoped2).order(Addr.init6(addr2)));
+    try testing.expectEqual(math.Order.gt, Addr.init6Scoped(scoped3).order(Addr.init4(Ip4Addr.init(0xffffffff))));
 }
 
 test "Ip4 Address/sizeOf" {
@@ -1007,9 +1055,10 @@ test "Ip4 Address/convert to and from std.net.Ip4Address" {
     try testing.expectEqual(value, addr.value());
     try testing.expectEqual(sys_addr, addr.toNetAddress(5));
 
-    const addr1 = Addr.fromNetAddress(sys_addr1).?;
+    var buf: [10]u8 = undefined;
+    const addr1 = try Addr.fromNetAddress(sys_addr1, buf[0..]);
     try testing.expectEqual(value, addr1.v4.value());
-    try testing.expectEqual(sys_addr1.in, addr1.toNetAddress(5).in);
+    try testing.expectEqual(sys_addr1.in, (try addr1.toNetAddress(5)).in);
 }
 
 test "Ip4 Address/convert to Ip6 Address" {
@@ -1020,6 +1069,12 @@ test "Ip4 Address/convert to Ip6 Address" {
         Addr.init6(Ip6Addr.init(eq_value)),
         Addr.init4(Ip4Addr.init(value)).as6(),
     );
+
+    const expected_scoped = Ip6AddrScoped.init(Ip6Addr.init(eq_value), "test");
+    const actual_scoped = Addr.init4(Ip4Addr.init(value)).as6Scoped("test").v6s;
+
+    try testing.expectEqual(expected_scoped.addr, actual_scoped.addr);
+    try testing.expectEqualStrings(expected_scoped.zone, actual_scoped.zone);
 }
 
 test "Ip4 Address/format" {
