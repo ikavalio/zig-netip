@@ -83,7 +83,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
                     switch (c) {
                         '0'...'9' => {
                             bits = math.mul(MaskBitsType, bits, 10) catch return ParseError.Overflow;
-                            bits = math.add(MaskBitsType, bits, @truncate(MaskBitsType, c - '0')) catch return ParseError.Overflow;
+                            bits = math.add(MaskBitsType, bits, @as(MaskBitsType, @truncate(c - '0'))) catch return ParseError.Overflow;
                         },
                         else => return ParseError.InvalidCharacter,
                     }
@@ -182,7 +182,7 @@ pub fn PrefixForAddrType(comptime T: type) type {
             return switch (O.AddrType) {
                 Ip6Addr => O.safeInit(self.addr.as(Ip6Addr).?, O.maxMaskBits - maxMaskBits + @as(O.MaskBitsType, self.mask_bits)),
                 Ip4Addr => if (self.addr.as(Ip4Addr)) |a|
-                    O.safeInit(a, @truncate(O.MaskBitsType, self.mask_bits - (maxMaskBits - O.maxMaskBits)))
+                    O.safeInit(a, @as(O.MaskBitsType, @truncate(self.mask_bits - (maxMaskBits - O.maxMaskBits))))
                 else
                     null,
                 else => @compileError("unsupported prefix conversion from '" ++ @typeName(Self) ++ "' to '" ++ @typeName(O) + "'"),
@@ -459,7 +459,7 @@ test "Prefix/inclusion" {
 
     const prefixes = [_][5]Prefix{ prefixes4, prefixes6 };
     for (prefixes) |prefix| {
-        for (prefix) |p, i| {
+        for (prefix, 0..) |p, i| {
             try testing.expectEqual(Inclusion.eq, p.testInclusion(p));
             try testing.expect(p.overlaps(p));
             for (prefix[0..i]) |prev| {

@@ -1,0 +1,11 @@
+.{
+    .name = "zig-netip",
+    .version = "0.0.1",
+    .paths = .{
+        "src/netip.zig",
+        "src/addr.zig",
+        "src/prefix.zig",
+        "build.zig",
+        "build.zig.zon",
+    },
+}
