@@ -40,7 +40,7 @@ const ip4 = struct {
         var len: u8 = 0;
         var ix: u8 = 0;
 
-        for (s) |c, i| {
+        for (s, 0..) |c, i| {
             switch (c) {
                 '0'...'9' => {
                     if (octs[ix] == 0 and len > 0) {
@@ -130,7 +130,7 @@ const ip6 = struct {
 
         var filled: usize = 0;
 
-        for (addr) |_, addr_i| {
+        for (addr, 0..) |_, addr_i| {
             var chunk_end: usize = 0;
             var acc: u16 = 0;
 
@@ -211,7 +211,7 @@ const ip6 = struct {
             if (ellipsis) |e| {
                 const zs = addr.len - filled;
                 mem.copyBackwards(u16, addr[e + zs .. addr.len], addr[e..filled]);
-                mem.set(u16, addr[e .. e + zs], 0);
+                @memset(addr[e .. e + zs], 0);
             } else {
                 return ParseError.NotEnoughSegments;
             }
@@ -295,7 +295,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// Elements of the array are ordered in the network order (most-significant first).
         /// Each integer value has the network byte order.
         pub fn fromArrayNetOrder(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
-            const p = @ptrCast(*align(@alignOf(u8)) const [byte_size / @sizeOf(u8)]u8, &a);
+            const p = @as(*align(@alignOf(u8)) const [byte_size / @sizeOf(u8)]u8, @ptrCast(&a));
             const v = mem.bigToNative(ValueType, mem.bytesToValue(ValueType, p));
             return Self{ .v = v };
         }
@@ -306,7 +306,7 @@ pub fn AddrForValue(comptime M: type) type {
         pub fn fromArray(comptime E: type, a: [byte_size / @sizeOf(E)]E) Self {
             var v: ValueType = 0;
 
-            inline for (a) |b, i| {
+            inline for (a, 0..) |b, i| {
                 v |= @as(ValueType, b) << (@bitSizeOf(E) * ((byte_size / @sizeOf(E)) - 1 - i));
             }
 
@@ -317,7 +317,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// The conversion is lossy and the port information
         /// is discarded.
         pub fn fromNetAddress(a: StdlibType) Self {
-            const bs = @ptrCast(*const [byte_size]u8, &a.sa.addr);
+            const bs = @as(*const [byte_size]u8, @ptrCast(&a.sa.addr));
             return fromArrayNetOrder(u8, bs.*);
         }
 
@@ -341,7 +341,7 @@ pub fn AddrForValue(comptime M: type) type {
         pub fn toArrayNetOrder(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
             var a = self.toArray(E);
 
-            inline for (a) |b, i| {
+            inline for (a, 0..) |b, i| {
                 a[i] = mem.nativeToBig(E, b);
             }
 
@@ -354,7 +354,7 @@ pub fn AddrForValue(comptime M: type) type {
         pub fn toArray(self: Self, comptime E: type) [byte_size / @sizeOf(E)]E {
             var a: [byte_size / @sizeOf(E)]E = undefined;
 
-            inline for (a) |_, i| {
+            inline for (a, 0..) |_, i| {
                 a[i] = self.get(E, i);
             }
 
@@ -371,7 +371,7 @@ pub fn AddrForValue(comptime M: type) type {
         /// Get an arbitrary integer value from the address.
         /// The value always has the native byte order.
         pub fn get(self: Self, comptime E: type, i: PositionType) E {
-            return @truncate(E, self.v >> (@bitSizeOf(E) * (byte_size / @sizeOf(E) - 1 - i)));
+            return @as(E, @truncate(self.v >> (@bitSizeOf(E) * (byte_size / @sizeOf(E) - 1 - i))));
         }
 
         fn formatMode(comptime fmt: []const u8) FormatMode {
@@ -437,7 +437,7 @@ pub fn AddrForValue(comptime M: type) type {
 
             return switch (O.Mixin) {
                 ip6 => O.init(0xffff00000000 | @as(O.ValueType, self.v)),
-                ip4 => if (self.v >> @bitSizeOf(O.ValueType) == 0xffff) O.init(@truncate(O.ValueType, self.v)) else null,
+                ip4 => if (self.v >> @bitSizeOf(O.ValueType) == 0xffff) O.init(@as(O.ValueType, @truncate(self.v))) else null,
                 else => @compileError("unsupported address conversion from '" ++ @typeName(Self) ++ "' to '" ++ @typeName(O) + "'"),
             };
         }
