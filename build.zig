@@ -24,6 +24,12 @@ pub fn build(b: *std.build.Builder) !void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    // Register a module so it can be referenced using the package manager.
+    var netip_module = b.createModule(.{
+        .source_file = .{ .path = "src/netip.zig" },
+    });
+    try b.modules.put(b.dupe("netip"), netip_module);
+
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const main_tests = b.addTest(.{
