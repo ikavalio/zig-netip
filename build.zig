@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -14,7 +14,7 @@ pub fn build(b: *std.build.Builder) !void {
 
     const lib = b.addStaticLibrary(.{
         .name = "netip",
-        .root_source_file = .{ .path = "src/netip.zig" },
+        .root_source_file = b.path("src/netip.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -25,15 +25,15 @@ pub fn build(b: *std.build.Builder) !void {
     b.installArtifact(lib);
 
     // Register a module so it can be referenced using the package manager.
-    var netip_module = b.createModule(.{
-        .source_file = .{ .path = "src/netip.zig" },
+    const netip_module = b.createModule(.{
+        .root_source_file = b.path("src/netip.zig"),
     });
     try b.modules.put(b.dupe("netip"), netip_module);
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/netip.zig" },
+        .root_source_file = b.path("src/netip.zig"),
         .target = target,
         .optimize = optimize,
     });

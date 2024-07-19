@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const math = std.math;
 const mem = std.mem;
 const net = std.net;
-const os = std.os;
+const posix = std.posix;
 const testing = std.testing;
 
 // common address format options
@@ -236,7 +236,7 @@ const ip6 = struct {
         while (i < segs.len) : (i += 1) {
             var j = i;
             while (j < segs.len and segs[j] == 0) : (j += 1) {}
-            var l = j - i;
+            const l = j - i;
             if (l > 1 and l > zero_end - zero_start) {
                 zero_start = i;
                 zero_end = j;
@@ -580,8 +580,8 @@ pub const Addr = union(AddrType) {
     /// Buf is only required for scoped IPv6 addresses.
     pub fn fromNetAddress(a: std.net.Address, buf: []u8) FromNetAddressError!Addr {
         return switch (a.any.family) {
-            os.AF.INET => Addr{ .v4 = Ip4Addr.fromNetAddress(a.in) },
-            os.AF.INET6 => switch (a.in6.sa.scope_id) {
+            posix.AF.INET => Addr{ .v4 = Ip4Addr.fromNetAddress(a.in) },
+            posix.AF.INET6 => switch (a.in6.sa.scope_id) {
                 0 => Addr{ .v6 = Ip6Addr.fromNetAddress(a.in6) },
                 else => Addr{ .v6s = try Ip6AddrScoped.fromNetAddress(a.in6, buf) },
             },
