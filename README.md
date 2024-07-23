@@ -3,7 +3,7 @@
 This is mostly an educational project to implement a library similar to go's [netip](https://pkg.go.dev/net/netip) 
 using zig idioms and comptime features. 
 
-The library works with zig `0.10`.
+The library targets the latest stable release which is currently `0.13`.
 
 # Definitions
 

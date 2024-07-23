@@ -4,17 +4,15 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: '0 3 * * 6'
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: 0.11.0
+          version: 0.13.0
       - run: zig version
       - run: zig env
       - run: zig build
